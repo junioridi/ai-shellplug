@@ -55,16 +55,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
 
         log("info", `POST /run → ${cfg.serverUrl}`);
-        const res = await fetch(cfg.serverUrl.replace(/\/$/, "") + "/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Token": cfg.token },
-          body: JSON.stringify({
-            cmd: msg.cmd,
-            cwd: msg.cwd,
-            timeout: msg.timeout,
-            sid: msg.sid || cfg.sid,
-          }),
-        });
+        let res;
+        try {
+          const ctrl = new AbortController();
+          const budgetMs = (msg.timeout ? msg.timeout * 1000 : 120000) + 5000;
+          const t = setTimeout(() => ctrl.abort(), budgetMs);
+          res = await fetch(cfg.serverUrl.replace(/\/$/, "") + "/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Token": cfg.token },
+            signal: ctrl.signal,
+            body: JSON.stringify({
+              cmd: msg.cmd,
+              cwd: msg.cwd,
+              timeout: msg.timeout,
+              sid: msg.sid || cfg.sid,
+            }),
+          });
+          clearTimeout(t);
+        } catch (e) {
+          const hint = `não foi possível falar com o servidor em ${cfg.serverUrl} ` +
+            `(${e && e.message ? e.message : e}). Verifique se o servidor está no ar, ` +
+            `use http://127.0.0.1:8765 e confira host_permissions da extensão.`;
+          log("error", hint);
+          sendResponse({ ok: false, exit: -1, stdout: "", stderr: "FetchError: " + hint });
+          return;
+        }
         const data = await res.json();
         if (!res.ok) {
           log("error", `HTTP ${res.status}: ${data.detail || ""}`);

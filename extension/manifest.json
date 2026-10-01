@@ -6,7 +6,8 @@
   "permissions": ["storage", "scripting", "tabs"],
   "host_permissions": [
     "https://chat.deepseek.com/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js"
