@@ -147,9 +147,7 @@
       .replace(/\\\\/g, "\\");
   }
 
-  if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText };
-  }
+  // exports completos são definidos no fim do arquivo
 
   async function maybeRunFromText(text) {
     const cmds = extractCommands(text);
@@ -257,7 +255,30 @@
   );
 
   const results = []; // histórico local para exibir
-  let lastResult = null; // último retorno de comando (para o botão "colar resultado")
+  // "Clipboard" = pilha de saídas; cada execução ANEXA. "Limpar" arquiva em history.
+  let outputLog = []; // pilha atual (entries/batches na ordem de execução)
+  let history = []; // lotes arquivados (cada item = { ts, items: [...] })
+  const HIST_KEY = "aisp_output_history"; // persistência em chrome.storage.local
+  let lastResult = null; // último retorno (compat)
+
+  function saveHistory() {
+    try {
+      chrome?.storage?.local?.set?.({ [HIST_KEY]: history.slice(-20) });
+    } catch (e) {
+      /* storage indisponível (ex.: testes) */
+    }
+  }
+
+  function loadHistory() {
+    try {
+      chrome?.storage?.local?.get?.([HIST_KEY], (o) => {
+        if (o && Array.isArray(o[HIST_KEY])) history = o[HIST_KEY];
+      });
+    } catch (e) {
+      /* ignora */
+    }
+  }
+  loadHistory();
 
   // 3b. Gatilho por linguagem natural: se a MENSAGEM ENVIADA pelo usuário
   //     contiver uma linha começando com "!" (ex: "!ls -la"), executamos aquele
@@ -317,8 +338,8 @@
   }
 
   function pasteLastResult() {
-    if (!lastResult) {
-      clog("info", "sem último resultado para colar");
+    if (!outputLog.length) {
+      clog("info", "clipboard vazio (nada para colar)");
       return false;
     }
     const el = findComposer();
@@ -326,7 +347,7 @@
       clog("info", "composer não encontrado");
       return false;
     }
-    setComposerText(el, PASTE_PREFIX + resultToText(lastResult));
+    setComposerText(el, PASTE_PREFIX + resultToText(outputLog));
     el.focus?.();
     submitComposer(el);
     return true;
@@ -376,7 +397,8 @@
     );
   }
 
-  function resultToText(entry) {
+  // Converte uma única entry/batch em texto. Usado por entryToText e pela pilha.
+  function entryToText(entry) {
     // Comando único.
     if (!entry || !entry.batch) {
       const head = entry.denied
@@ -393,6 +415,31 @@
         return `$ ${st.cmd}\n${head}\n${st.stdout || ""}${st.stderr || ""}`.trim();
       })
       .join("\n\n");
+  }
+
+  function resultToText(entry) {
+    // Se receber um array (a pilha), concatena todas as saídas empilhadas.
+    if (Array.isArray(entry)) return entry.map((e) => entryToText(e)).join("\n\n");
+    return entryToText(entry);
+  }
+
+  // Anexa uma entry/batch à pilha (clipboard) e re-renderiza.
+  function pushOutput(entry) {
+    outputLog.push(entry);
+    lastResult = entry;
+    injectResult();
+  }
+
+  // "Limpar": arquiva a pilha atual no histórico e zera o clipboard/popup.
+  function clearOutput() {
+    if (outputLog.length) {
+      history.push({ ts: Date.now(), items: outputLog });
+      saveHistory();
+      outputLog = [];
+      clog("info", `clipboard limpo (${history[history.length - 1].items.length} bloco(s) arquivado(s))`);
+    }
+    lastResult = outputLog.length ? outputLog[outputLog.length - 1] : null;
+    injectResult();
   }
 
   // Divisão de um bloco de código em comandos executáveis (uma linha não vazia
@@ -450,8 +497,7 @@
     }
     const batch = { cmd: list.join("\n"), batch: true, stages: [], done: 0, total: list.length };
     results.push(batch);
-    lastResult = batch;
-    injectResult(batch);
+    pushOutput(batch);
 
     const sid = getSid();
     const step = (i) => {
@@ -466,7 +512,7 @@
         batch.done++;
         lastResult = batch;
         try {
-          injectResult(batch);
+          injectResult();
         } catch (e) {
           clog("warn", `falha ao renderizar resultado: ${e.message}`);
         }
@@ -481,17 +527,17 @@
     chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto, sid: getSid() }, (res) => {
       const entry = { cmd, ...res };
       results.push(entry);
-      lastResult = entry;
       try {
-        injectResult(entry);
+        pushOutput(entry);
       } catch (e) {
         clog("warn", `falha ao renderizar resultado: ${e.message}`);
       }
     });
   }
 
-  // 4. Injeta o resultado na página como um "bloco" abaixo do chat
-  function injectResult(entry) {
+  // 4. Injeção do resultado na página como um "bloco" abaixo do chat.
+  //    Agora re-renderiza a PILHA inteira (outputLog) — cada execução anexa.
+  function injectResult() {
     let box = document.getElementById("aisp-result-box");
     if (!box) {
       box = document.createElement("div");
@@ -517,19 +563,25 @@
       const title = document.createElement("span");
       title.textContent = "ai-shellplug";
       title.style.cssText = "flex:1;user-select:none";
-      const toggle = document.createElement("button");
-      toggle.className = "aisp-result-toggle";
-      toggle.textContent = "⛶";
-      toggle.title = "Maximizar";
-      toggle.style.cssText =
-        "cursor:pointer;padding:1px 7px;border-radius:6px;border:1px solid #555;" +
-        "background:#2a2a2a;color:#7fffd4;font:12px/1.3 system-ui,sans-serif";
-      toggle.onclick = (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
+      const mkBtn = (label, titleTxt, onClick) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.title = titleTxt;
+        b.style.cssText =
+          "cursor:pointer;padding:1px 7px;border-radius:6px;border:1px solid #555;" +
+          "background:#2a2a2a;color:#7fffd4;font:12px/1.3 system-ui,sans-serif";
+        b.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          onClick();
+        };
+        return b;
+      };
+      const clearBtn = mkBtn("🗑", "Limpar (zera o clipboard e o popup)", clearOutput);
+      const histBtn = mkBtn("📜", "Histórico (saídas anteriores)", showHistory);
+      const toggle = mkBtn("⛶", "Maximizar", () => {
         const full = box.dataset.full === "1";
         if (full) {
-          // Minimizar: volta ao tamanho pequeno.
           box.style.maxWidth = "420px";
           box.style.maxHeight = "40vh";
           box.style.borderRadius = "8px";
@@ -539,7 +591,6 @@
           toggle.textContent = "⛶";
           toggle.title = "Maximizar";
         } else {
-          // Maximizar: ocupa a tela toda.
           box.style.maxWidth = "100vw";
           box.style.maxHeight = "100vh";
           box.style.borderRadius = "0";
@@ -549,8 +600,10 @@
           toggle.textContent = "🗕";
           toggle.title = "Minimizar";
         }
-      };
+      });
       bar.appendChild(title);
+      bar.appendChild(histBtn);
+      bar.appendChild(clearBtn);
       bar.appendChild(toggle);
 
       const body = document.createElement("div");
@@ -563,26 +616,94 @@
       document.body.appendChild(box);
     }
     const body = box.querySelector(".aisp-result-body") || box;
-    // Batch: re-renderiza o conteúdo inteiro (acumulado) a cada etapa.
-    if (entry.batch) {
-      body.textContent = "";
-      entry.stages.forEach((st) => {
-        const h = st.denied
-          ? "❌ negado"
-          : `exit=${st.exit} (${st.duration_ms ?? "?"}ms)${st.timed_out ? " TIMEOUT" : ""}`;
-        body.textContent += `$ ${st.cmd}\n${h}\n${st.stdout || ""}${st.stderr || ""}\n\n`;
-      });
-      if (entry.done < entry.total) {
-        body.textContent += `… executando ${entry.done}/${entry.total}…`;
-      }
-      box.scrollTop = box.scrollHeight;
+    // Re-renderiza a PILHA inteira: cada execução anexa ao clipboard.
+    body.textContent = "";
+    if (!outputLog.length) {
+      body.textContent = "(sem saídas — o clipboard foi limpo)";
       return;
     }
-    const head = entry.denied
-      ? "❌ negado"
-      : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
-    body.textContent += `\n$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}\n`;
+    outputLog.forEach((entry) => {
+      if (entry.batch) {
+        entry.stages.forEach((st) => {
+          const h = st.denied
+            ? "❌ negado"
+            : `exit=${st.exit} (${st.duration_ms ?? "?"}ms)${st.timed_out ? " TIMEOUT" : ""}`;
+          body.textContent += `$ ${st.cmd}\n${h}\n${st.stdout || ""}${st.stderr || ""}\n`;
+        });
+        if (entry.done < entry.total) {
+          body.textContent += `… executando ${entry.done}/${entry.total}…\n`;
+        }
+      } else {
+        const head = entry.denied
+          ? "❌ negado"
+          : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
+        body.textContent += `$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}\n`;
+      }
+      // separador entre saídas empilhadas
+      body.textContent += "\n────────\n\n";
+    });
     box.scrollTop = box.scrollHeight;
+  }
+
+  // Painel de histórico: mostra os lotes arquivados pelo "Limpar".
+  function showHistory() {
+    const modal = document.createElement("div");
+    modal.id = "aisp-history-modal";
+    modal.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2147483647;" +
+      "display:flex;align-items:center;justify-content:center;font:12px/1.5 monospace";
+    const panel = document.createElement("div");
+    panel.style.cssText =
+      "background:#111;color:#0f0;border:1px solid #333;border-radius:8px;" +
+      "max-width:80vw;max-height:80vh;overflow:auto;padding:12px 14px;white-space:pre-wrap";
+
+    // Botões: fechar + limpar histórico.
+    const hb = document.createElement("div");
+    hb.style.cssText = "display:flex;gap:8px;margin-bottom:8px;font-family:system-ui,sans-serif;color:#7fffd4";
+    const close = document.createElement("button");
+    close.textContent = "✕ fechar";
+    close.style.cssText =
+      "cursor:pointer;padding:2px 8px;border-radius:6px;border:1px solid #555;background:#2a2a2a;color:#7fffd4";
+    close.onclick = () => modal.remove();
+    const wipe = document.createElement("button");
+    wipe.textContent = "🗑 apagar histórico";
+    wipe.style.cssText = close.style.cssText;
+    wipe.onclick = () => {
+      history = [];
+      saveHistory();
+      render();
+    };
+    hb.appendChild(close);
+    hb.appendChild(wipe);
+    panel.appendChild(hb);
+
+    const content = document.createElement("div");
+    panel.appendChild(content);
+
+    function render() {
+      content.textContent = "";
+      if (!history.length) {
+        content.textContent = "(histórico vazio)";
+        return;
+      }
+      history
+        .slice()
+        .reverse()
+        .forEach((lot, idx) => {
+          const when = new Date(lot.ts).toLocaleString();
+          const n = lot.items.length;
+          content.textContent += `── lote ${history.length - idx} · ${when} · ${n} bloco(s) ──\n`;
+          lot.items.forEach((it) => {
+            content.textContent += resultToText(it) + "\n\n";
+          });
+        });
+    }
+    render();
+    modal.addEventListener("click", (ev) => {
+      if (ev.target === modal) modal.remove();
+    });
+    modal.appendChild(panel);
+    document.body.appendChild(modal);
   }
 
   // 4b. Injeta um botão "Executar" em cada bloco de código (classe md-code-block)
@@ -669,6 +790,6 @@
   }, 500);
 
   if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, getLastResult: () => lastResult };
+    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, clearOutput, pushOutput, getLastResult: () => lastResult, getOutputLog: () => outputLog, getHistory: () => history };
   }
 })();
