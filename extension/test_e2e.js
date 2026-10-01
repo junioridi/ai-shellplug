@@ -48,6 +48,19 @@ function mkEl(tag) {
     tag, textContent: "", innerHTML: "",
     style: { cssText: "" }, children: [], scrollTop: 0, scrollHeight: 0,
     appendChild(c) { this.children.push(c); return c; },
+    addEventListener() {}, removeEventListener() {},
+    setAttribute() {}, getAttribute() { return null; },
+    title: "", dataset: {}, className: "", onclick: null,
+    classList: { _s: new Set(), add(c){this._s.add(c);}, contains(c){return this._s.has(c);} },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+    querySelectorAll(sel) {
+      const out = [];
+      const match = (n) => sel.startsWith(".")
+        ? (n.classList && n.classList.contains(sel.slice(1)))
+        : n.tag === sel;
+      (function walk(n) { for (const c of n.children || []) { if (match(c)) out.push(c); walk(c); } })(this);
+      return out;
+    },
     remove() {},
   };
   el.id = "";

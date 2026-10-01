@@ -8,11 +8,12 @@ let codeCb = null, moCb = null;
 function mkEl(tag) {
   const el = {
     tagName: tag, nodeType: 1, _children: [], parentNode: null, className: "", id: "", style: {},
-    _text: "", onclick: null,
+    _text: "", onclick: null, dataset: {},
     get innerText() { return this._text; }, set innerText(v) { this._text = v; },
-    get textContent() { return this._text; },
+    get textContent() { return this._text; }, set textContent(v) { this._text = v; },
     classList: { _s: new Set(), add(c){this._s.add(c);}, contains(c){return this._s.has(c);} },
     setAttribute(){}, getAttribute(){ return null; },
+    addEventListener(){}, removeEventListener(){},
     appendChild(c){ c.parentNode = this; this._children.push(c); return c; },
     insertBefore(n, ref){ n.parentNode = this; const i=this._children.indexOf(ref); this._children.splice(i<0?0:i,0,n); return n; },
     querySelector(sel){ return this.querySelectorAll(sel)[0] || null; },

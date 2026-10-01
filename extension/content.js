@@ -387,17 +387,77 @@
     if (!box) {
       box = document.createElement("div");
       box.id = "aisp-result-box";
+      // Opacidade 0.6 pedida; o conteúdo continua legível e deixa ver a página.
       box.style.cssText =
         "position:fixed;right:12px;bottom:12px;max-width:420px;max-height:40vh;" +
         "overflow:auto;background:#111;color:#0f0;font:12px/1.4 monospace;" +
-        "padding:8px 10px;border:1px solid #333;border-radius:8px;z-index:2147483647;" +
-        "white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.4)";
+        "padding:0;border:1px solid #333;border-radius:8px;z-index:2147483647;" +
+        "white-space:pre-wrap;box-shadow:0 4px 16px rgba(0,0,0,.4);opacity:0.6";
+      box.style.transition = "opacity .15s ease";
+      // Mantém legível ao passar o mouse (recupera opacidade total).
+      box.addEventListener("mouseenter", () => { box.style.opacity = "1"; });
+      box.addEventListener("mouseleave", () => { box.style.opacity = "0.6"; });
+
+      // Barra de título com botão de maximizar/minimizar.
+      const bar = document.createElement("div");
+      bar.className = "aisp-result-bar";
+      bar.style.cssText =
+        "display:flex;align-items:center;gap:6px;position:sticky;top:0;" +
+        "background:#1a1a1a;padding:4px 8px;border-bottom:1px solid #333;" +
+        "font:12px/1.4 system-ui,sans-serif;color:#7fffd4";
+      const title = document.createElement("span");
+      title.textContent = "ai-shellplug";
+      title.style.cssText = "flex:1;user-select:none";
+      const toggle = document.createElement("button");
+      toggle.className = "aisp-result-toggle";
+      toggle.textContent = "⛶";
+      toggle.title = "Maximizar";
+      toggle.style.cssText =
+        "cursor:pointer;padding:1px 7px;border-radius:6px;border:1px solid #555;" +
+        "background:#2a2a2a;color:#7fffd4;font:12px/1.3 system-ui,sans-serif";
+      toggle.onclick = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const full = box.dataset.full === "1";
+        if (full) {
+          // Minimizar: volta ao tamanho pequeno.
+          box.style.maxWidth = "420px";
+          box.style.maxHeight = "40vh";
+          box.style.borderRadius = "8px";
+          box.style.right = "12px";
+          box.style.bottom = "12px";
+          box.dataset.full = "0";
+          toggle.textContent = "⛶";
+          toggle.title = "Maximizar";
+        } else {
+          // Maximizar: ocupa a tela toda.
+          box.style.maxWidth = "100vw";
+          box.style.maxHeight = "100vh";
+          box.style.borderRadius = "0";
+          box.style.right = "0";
+          box.style.bottom = "0";
+          box.dataset.full = "1";
+          toggle.textContent = "🗕";
+          toggle.title = "Minimizar";
+        }
+      };
+      bar.appendChild(title);
+      bar.appendChild(toggle);
+
+      const body = document.createElement("div");
+      body.className = "aisp-result-body";
+      body.style.cssText = "padding:8px 10px";
+      body.textContent = "";
+
+      box.appendChild(bar);
+      box.appendChild(body);
       document.body.appendChild(box);
     }
+    const body = box.querySelector(".aisp-result-body") || box;
     const head = entry.denied
       ? "❌ negado"
       : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
-    box.textContent += `\n$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}\n`;
+    body.textContent += `\n$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}\n`;
     box.scrollTop = box.scrollHeight;
   }
 
