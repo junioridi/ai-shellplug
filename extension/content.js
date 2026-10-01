@@ -317,10 +317,36 @@
     if (el.tagName === "TEXTAREA") {
       el.value = text;
       el.dispatchEvent(new Event("input", { bubbles: true }));
-    } else {
-      el.innerText = text;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
     }
+    // contenteditable (DeepSeek): definir innerText faz o editor rich
+    // interpretar "/" como gatilho do menu slash e truncar o texto.
+    // Inserimos literalmente via execCommand, que NÃO dispara o atalho.
+    el.focus?.();
+    const sel = window.getSelection?.();
+    if (sel && el.isContentEditable) {
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand("selectAll", false, null);
+      } catch (_) {}
+    }
+    let ok = false;
+    try {
+      ok = document.execCommand("insertText", false, text);
+    } catch (_) {
+      ok = false;
+    }
+    if (!ok) {
+      // Fallback: ainda usa innerText, mas em nós de texto para evitar o
+      // parser do editor enxergar um "/" solto no começo de um nó.
+      el.textContent = "";
+      el.appendChild(document.createTextNode(text));
+    }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
   }
 
   function submitComposer(el) {
@@ -472,6 +498,7 @@
         }
         continue;
       }
+      // ";" separa comandos, MAS não quebramos nada aqui por causa de "/".
       if (ch === "\n" || ch === ";") {
         out.push(cur);
         cur = "";
