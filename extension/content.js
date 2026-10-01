@@ -613,6 +613,7 @@
       };
       const clearBtn = mkBtn("🗑", "Limpar (zera o clipboard e o popup)", clearOutput);
       const histBtn = mkBtn("📜", "Histórico (saídas anteriores)", showHistory);
+      const scrollBtn = mkBtn("⤓", "Rolar até o último botão ▶ executado", scrollToLastRunButton);
       const toggle = mkBtn("⛶", "Maximizar", () => {
         const full = box.dataset.full === "1";
         if (full) {
@@ -804,6 +805,35 @@
     return text.replace(/\r/g, "").replace(/^\$\s+/gm, "").trimEnd();
   }
 
+  // Deixa o botão ▶ cinza (cor de fundo, borda e texto) para sinalizar que o
+  // comando daquele bloco já foi executado. Também memoriza o último botão
+  // executado para o "scroll até o último" do popup.
+  let lastRunButton = null;
+
+  function grayOutRunButton(btn) {
+    if (!btn || !btn.style) return;
+    btn.style.background = "#3a3a3a";
+    btn.style.borderColor = "#555";
+    btn.style.color = "#999";
+    btn.style.cursor = "default";
+    btn.title = (btn.title ? btn.title + "\n" : "") + "(comando já executado)";
+    lastRunButton = btn;
+  }
+
+  // Rola a página para que o último botão ▶ executado volte à área visível.
+  function scrollToLastRunButton() {
+    if (!lastRunButton) {
+      clog("warn", "scroll: nenhum botão executado ainda");
+      return;
+    }
+    try {
+      lastRunButton.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (e) {
+      // Fallback para navegadores sem scrollIntoView com opções.
+      lastRunButton.scrollIntoView();
+    }
+  }
+
   function attachRunButtons(root) {
     const scope = root && typeof root.querySelectorAll === "function" ? root : document;
     if (!scope || typeof scope.querySelectorAll !== "function") return;
@@ -829,6 +859,7 @@
         ev.stopPropagation();
         // Blocos podem ter múltiplas linhas: cada linha é um comando, executado
         // em sequência (mesmo sid → cwd/env preservados). Sem popup de confirmação.
+        grayOutRunButton(btn);
         runBlock(splitBlockCommands(cmd), true);
       };
       // Insere logo antes do <pre>/bloco, se possível.
@@ -870,6 +901,6 @@
   }, 500);
 
   if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, clearOutput, pushOutput, getLastResult: () => lastResult, getOutputLog: () => outputLog, getHistory: () => history };
+    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, clearOutput, pushOutput, grayOutRunButton, scrollToLastRunButton, getLastResult: () => lastResult, getOutputLog: () => outputLog, getHistory: () => history };
   }
 })();
