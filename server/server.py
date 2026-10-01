@@ -6,10 +6,19 @@ Ouvinte local que executa comandos de shell disparados pela extensão de browser
 (que por sua vez os extrai de blocos ```json {"tool":"exec","cmd":"..."}``` em
 páginas de chat de IA como a do DeepSeek).
 
+Superusuário:
+- por padrão o servidor exige rodar como root (Linux/Unix). Se iniciado como
+  usuário comum, ele se re-executa via `sudo` automaticamente (a menos que
+  AISHELLPLUG_REQUIRE_ROOT=0, que apenas avisa).
+- cada comando é executado com privilégios de superusuário (euid 0). Se por
+  algum motivo o processo não estiver como root, o wrapper usa `sudo -n` para
+  elevar o comando.
+- desative com AISHELLPLUG_AS_ROOT=0 (executa como o usuário que subiu o server).
+
 Segurança (v1):
 - bind só em 127.0.0.1
 - token compartilhado obrigatório no header `X-Token`
-- shell arbitrário (decisão do usuário: opção "a"), com timeout e captura de saída
+- shell arbitrário como root (decidido pelo usuário), com timeout e captura de saída
 - cada execução é logada (stdout do servidor + arquivo de log)
 """
 from __future__ import annotations
@@ -17,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,8 +52,24 @@ LOG_FILE = Path(os.environ.get("AISHELLPLUG_LOG", Path(__file__).parent / "log" 
 LOG_LEVEL = os.environ.get("AISHELLPLUG_LOG_LEVEL", "info").lower()
 MAX_LOG_TEXT = int(os.environ.get("AISHELLPLUG_LOG_MAXTEXT", "4000"))
 
+# Superusuário: por padrão exige root e auto-eleva no boot (Linux/Unix).
+AS_ROOT = os.environ.get("AISHELLPLUG_AS_ROOT", "1").strip().lower() not in ("0", "false", "no", "")
+REQUIRE_ROOT = os.environ.get("AISHELLPLUG_REQUIRE_ROOT", "1").strip().lower() not in ("0", "false", "no", "")
+
 
 IS_WINDOWS = platform.system().lower().startswith("win")
+
+
+def _is_root() -> bool:
+    """True se o processo atual tem privilégio de superusuário (root/admin)."""
+    if IS_WINDOWS:
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:  # noqa: BLE001
+            return False
+    return hasattr(os, "geteuid") and os.geteuid() == 0
 
 # Estado de shell por sessão (sid). Preserva o diretório de trabalho (e variáveis
 # de ambiente exportadas) entre comandos, como num shell interativo. Fica só em
@@ -118,7 +144,13 @@ def _build_argv(cmd: str, sentinel: str) -> list[str]:
     O comando roda no diretório atual da sessão; ao final, o `pwd` resultante e o
     ambiente (env/set) são gravados no arquivo `sentinel` para que o próximo
     comando parta do mesmo diretório e com as variáveis de ambiente exportadas.
+
+    Superusuário: quando `AS_ROOT` e o processo não é root, prefixa com `sudo -n`
+    (não-interativo) para elevar o comando sem travar pedindo senha.
     """
+    prefix: list[str] = []
+    if AS_ROOT and not _is_root() and not IS_WINDOWS:
+        prefix = ["sudo", "-n"]
     if IS_WINDOWS:
         wrapper = (
             f"{cmd}\r\n"
@@ -134,7 +166,7 @@ def _build_argv(cmd: str, sentinel: str) -> list[str]:
         f"env >> {sentinel}\n"
         f"exit $__aisp_code"
     )
-    return ["bash", "-c", wrapper]
+    return [*prefix, "bash", "-c", wrapper]
 
 
 def _parse_sentinel(path: str) -> tuple[str, dict]:
@@ -162,8 +194,16 @@ def _parse_sentinel(path: str) -> tuple[str, dict]:
 
 @app.get("/health")
 def health() -> dict:
-    _log("health", shell="powershell" if IS_WINDOWS else "bash")
-    return {"ok": True, "os": platform.system(), "shell": "powershell" if IS_WINDOWS else "bash"}
+    root = _is_root()
+    _log("health", shell="powershell" if IS_WINDOWS else "bash", root=root)
+    return {
+        "ok": True,
+        "os": platform.system(),
+        "shell": "powershell" if IS_WINDOWS else "bash",
+        "root": root,
+        "euid": (os.geteuid() if hasattr(os, "geteuid") else None),
+        "as_root": AS_ROOT,
+    }
 
 
 @app.post("/run")
@@ -304,6 +344,36 @@ def tail_log(n: int = 20, x_token: Optional[str] = Header(default=None), level: 
 
 
 
+def _maybe_reexec_as_root() -> None:
+    """Se não for root e exigirmos superusuário, re-executa o processo via sudo.
+
+    Usa os.execvp para substituir o processo atual (sem novo pai). Preserva o
+    ambiente (que carrega AISHELLPLUG_TOKEN etc.). Só no Linux/Unix.
+    """
+    if IS_WINDOWS or _is_root() or not AS_ROOT:
+        return
+    if not REQUIRE_ROOT:
+        print(
+            "AVISO: servidor NÃO está como root e AISHELLPLUG_REQUIRE_ROOT=0; "
+            "comandos tentarão elevar via `sudo -n`.",
+            file=sys.stderr,
+        )
+        return
+    if shutil.which("sudo") is None:
+        print(
+            "ERRO: preciso de root mas `sudo` não foi encontrado. Rode como root "
+            "ou defina AISHELLPLUG_REQUIRE_ROOT=0.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print("Elevando para root via sudo (re-exec)…", file=sys.stderr)
+    try:
+        os.execvp("sudo", ["sudo", "-n", sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    except OSError as exc:  # pragma: no cover
+        print(f"ERRO: falha ao elevar via sudo: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -312,4 +382,15 @@ if __name__ == "__main__":
             "AVISO: usando token default. Defina AISHELLPLUG_TOKEN antes de expor.",
             file=sys.stderr,
         )
+
+    _maybe_reexec_as_root()
+    if AS_ROOT and not _is_root():
+        print(
+            "AVISO: rodando como usuário comum; comandos usarão `sudo -n` se possível.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"ai-shellplug rodando como {'root' if _is_root() else 'usuário'} "
+              f"(euid={os.geteuid() if hasattr(os,'geteuid') else 'n/a'})", file=sys.stderr)
+
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")

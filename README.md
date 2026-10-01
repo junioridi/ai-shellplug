@@ -27,11 +27,25 @@ página DeepSeek  →  content.js (DOM)  →  confirmação  →  background (se
 ### Rodar
 ```bash
 cd server
+# roda SEMPRE como root: se iniciado como usuário comum, ele se re-executa via sudo.
 AISHELLPLUG_TOKEN=seu-token-aqui ../.venv/bin/python server.py
-# ou: uvicorn server:app --host 127.0.0.1 --port 8765
+# para subir já como root sem prompt de senha:
+sudo AISHELLPLUG_TOKEN=seu-token-aqui ../.venv/bin/python server.py
+# ou: sudo uvicorn server:app --host 127.0.0.1 --port 8765
 ```
 Variáveis: `AISHELLPLUG_TOKEN`, `AISHELLPLUG_HOST`, `AISHELLPLUG_PORT`,
-`AISHELLPLUG_TIMEOUT`, `AISHELLPLUG_LOG`.
+`AISHELLPLUG_TIMEOUT`, `AISHELLPLUG_LOG`, `AISHELLPLUG_AS_ROOT` (default `1`:
+comandos com privilégio de superusuário), `AISHELLPLUG_REQUIRE_ROOT` (default `1`:
+o processo exige root e auto-eleva no boot; `0` apenas avisa e usa `sudo -n` por comando).
+
+### Superusuário
+- Por padrão o servidor roda como **root** (Linux/macOS) e executa cada shell com
+  privilégio de superusuário (euid 0). No Windows, requer processo elevado (admin).
+- `GET /health` retorna `{"root": true|false, "euid": N, "as_root": bool}`.
+- Se o processo não for root, cada comando é prefixado com `sudo -n` (não-interativo);
+  sem sudo sem senha configurado, os comandos falham com `sudo: a password is required`
+  — nesse caso suba o servidor diretamente com `sudo`.
+- Para rodar como usuário comum (sem privilégio): `AISHELLPLUG_AS_ROOT=0`.
 
 ## Extensão
 1. `chrome://extensions` → modo desenvolvedor → "Carregar sem compactação" → pasta `extension/`.
