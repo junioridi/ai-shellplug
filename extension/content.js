@@ -178,8 +178,13 @@
     }
     bar.innerHTML = "";
     const label = document.createElement("code");
-    label.textContent = String(cmd).slice(0, 80);
-    label.style.cssText = "color:#7fffd4;margin-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw";
+    // Mostra o comando INTEIRO (sem cortar/elliptar): comandos longos como
+    // "ps -p <pid> -o pid,etime" eram exibidos truncados por nowrap+ellipsis,
+    // dando a impressão de execução truncada. Agora quebra linha e é scrollável.
+    label.textContent = String(cmd);
+    label.style.cssText =
+      "color:#7fffd4;margin-right:8px;white-space:pre-wrap;word-break:break-all;" +
+      "overflow:auto;max-width:60vw;max-height:6em";
     bar.appendChild(label);
 
     const mk = (txt, approve, auto) => {
