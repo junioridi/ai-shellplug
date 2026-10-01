@@ -21,7 +21,11 @@
   <label for="serverUrl">Servidor</label>
   <input id="serverUrl" placeholder="http://127.0.0.1:8765" />
   <label for="token">Token</label>
-  <input id="token" placeholder="change-me-local-token" />
+  <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="change-me-local-token" />
+  <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+    <input id="showToken" type="checkbox" style="width:auto" />
+    <label for="showToken" style="margin:0">mostrar token</label>
+  </div>
   <button id="save">Salvar</button>
   <button id="approveAll">Aprovar tudo por 30 min</button>
   <button id="health">Testar servidor</button>

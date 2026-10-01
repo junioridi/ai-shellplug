@@ -25,21 +25,49 @@ function renderLog(entries) {
 }
 
 async function load() {
-  const cfg = await chrome.storage.local.get(DEFAULTS);
-  $("serverUrl").value = cfg.serverUrl;
-  $("token").value = cfg.token;
+  let cfg;
+  try {
+    cfg = await chrome.storage.local.get(DEFAULTS);
+  } catch (e) {
+    $("status").textContent = "erro lendo storage: " + e;
+    cfg = DEFAULTS;
+  }
+  $("serverUrl").value = cfg.serverUrl || "";
+  $("token").value = cfg.token || "";
+  // mostra o que está de fato salvo, para o usuário conferir
+  $("status").textContent = "config atual: token=" + (cfg.token || "(vazio)").slice(0, 6) + "…";
   const { aispLog } = await chrome.storage.local.get({ aispLog: [] });
   renderLog(aispLog);
 }
 
-$("save").onclick = async () => {
-  await chrome.storage.local.set({
-    serverUrl: $("serverUrl").value.trim(),
-    token: $("token").value.trim(),
-  });
-  $("status").textContent = "salvo ✓";
-  setTimeout(() => ($("status").textContent = ""), 1500);
-};
+async function save() {
+  const serverUrl = $("serverUrl").value.trim();
+  const token = $("token").value.trim();
+  try {
+    await chrome.storage.local.set({ serverUrl, token });
+    // confirma relendo o storage
+    const back = await chrome.storage.local.get({ serverUrl: "", token: "" });
+    const okv = back.token === token;
+    $("status").textContent = okv
+      ? `salvo ✓ (token=${token ? token.slice(0, 6) + "…" : "(vazio)"})`
+      : `NÃO salvou (storage devolveu "${back.token}")`;
+    setTimeout(() => ($("status").textContent = ""), 2500);
+  } catch (e) {
+    $("status").textContent = "erro ao salvar: " + e;
+  }
+}
+
+$("save").addEventListener("click", save);
+
+// Salva também ao sair do campo / pressionar Enter, sem depender do clique.
+for (const id of ["serverUrl", "token"]) {
+  $(id).addEventListener("change", save);
+  $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+}
+
+$("showToken").addEventListener("change", () => {
+  $("token").type = $("showToken").checked ? "text" : "password";
+});
 
 $("approveAll").onclick = async () => {
   const r = await chrome.runtime.sendMessage({ type: "approve-all", minutes: 30 });
