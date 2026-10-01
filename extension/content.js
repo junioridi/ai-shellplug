@@ -740,19 +740,65 @@
 
   // 4b. Injeta um botão "Executar" em cada bloco de código (classe md-code-block)
   //     renderizado no chat, permitindo rodar o comando direto pelo clique.
+  // Reconstrói o texto de um nó preservando espaços quando o highlighter do
+  // site quebra o código em <span>s de tokens (um <span> por token, sem os
+  // espaços em nós de texto). Usar só textContent cola os tokens
+  // ("ps"+"-p"+"1925604" => "ps-p1925604") e comandos como
+  // "ps -p <pid> -o etime" chegavam mutilados ao shell ("ps -").
+  function nodeToText(node) {
+    if (!node) return "";
+    let out = "";
+    const kids = node.childNodes || node._children || node.children || [];
+    if (!kids || !kids.length) {
+      // Folha: usa o texto que tiver (textContent é mais fiel que innerText).
+      return node.textContent != null && node.textContent !== ""
+        ? node.textContent
+        : node.innerText != null
+        ? node.innerText
+        : node.nodeValue != null
+        ? node.nodeValue
+        : "";
+    }
+    for (const ch of kids) {
+      if (ch.nodeType === 3 /* texto */) {
+        out += ch.nodeValue != null ? ch.nodeValue : ch.textContent || "";
+      } else if (ch.tagName === "BR") {
+        out += "\n";
+      } else {
+        out += nodeToText(ch);
+      }
+    }
+    // Se os filhos não produziram nada (ex.: spans vazios), cai no textContent.
+    if (!out) out = node.textContent != null ? node.textContent : "";
+    return out;
+  }
+
   function codeFromBlock(block) {
     // O texto pode estar num <pre><code>, num <pre>, ou direto no bloco.
-    // Preferimos o <code> com textContent: o highlighter do site quebra o texto
-    // em <span>s e o innerText pode colapsar/perder trechos (ex.: "%MEM" -> "…").
     const codeEl = block.querySelector && block.querySelector("pre code, code");
     const pre = block.querySelector && block.querySelector("pre");
     const target = codeEl || pre || block;
-    let text = target.textContent;
-    if (text == null) text = target.innerText || "";
-    // Normaliza caracteres invisíveis que o editor injeta entre tokens.
-    text = text
-      .replace(/[\u200b\u200c\u200d\ufeff]/g, "") // zero-width
-      .replace(/\u00a0/g, " "); // nbsp
+
+    function sanitize(t) {
+      return String(t == null ? "" : t)
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, "") // zero-width
+        .replace(/\u00a0/g, " "); // nbsp
+    }
+
+    // 1º caminho estruturado preservando espaços (nós de texto / <br>).
+    let text = sanitize(nodeToText(target));
+    // 2º fallback fiel ao layout. Em <pre>, o innerText respeita os espaços
+    // REAIS do código mesmo quando o highlighter emite um <span> por token
+    // SEM nós de espaço entre eles (aí o caminho estruturado cola os tokens).
+    if (pre && typeof pre.innerText === "string" && pre.innerText) {
+      const preText = sanitize(pre.innerText);
+      // Usa o innerText quando o estruturado "colou" tokens (ex.: "ps-p" em vez
+      // de "ps -p") — heurística: mesmo comprimento sem espaços e mais espaços
+      // no innerText.
+      const spacesOf = (s) => (s.match(/\s/g) || []).length;
+      if (spacesOf(preText) > spacesOf(text)) text = preText;
+    }
+    if (!text) text = sanitize(target.textContent != null ? target.textContent : target.innerText || "");
     return text.replace(/\r/g, "").replace(/^\$\s+/gm, "").trimEnd();
   }
 
