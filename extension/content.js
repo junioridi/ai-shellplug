@@ -397,10 +397,43 @@
 
   // Divisão de um bloco de código em comandos executáveis (uma linha não vazia
   // por comando). Linhas iniciadas por "#" viram comentários "/" e são ignoradas.
+  // Divide um bloco em comandos por linha, mas SEM cortar quebras de linha
+  // que estejam dentro de aspas simples/duplas (ex.: echo 'a<newline>b').
   function splitBlockCommands(text) {
-    return String(text || "")
-      .replace(/\r/g, "")
-      .split("\n")
+    const src = String(text || "").replace(/\r/g, "");
+    const out = [];
+    let cur = "";
+    let quote = null; // "'" ou '"' quando dentro de aspas
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (quote) {
+        cur += ch;
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        cur += ch;
+        continue;
+      }
+      if (ch === "\\") {
+        // mantém a sequência de escape intacta (ex.: \" ou \')
+        cur += ch;
+        if (i + 1 < src.length) {
+          cur += src[i + 1];
+          i++;
+        }
+        continue;
+      }
+      if (ch === "\n" || ch === ";") {
+        out.push(cur);
+        cur = "";
+        continue;
+      }
+      cur += ch;
+    }
+    out.push(cur);
+    return out
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
   }
