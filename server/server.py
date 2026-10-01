@@ -115,14 +115,49 @@ def _log(event: str, level: str = "info", **fields) -> None:
 def _build_argv(cmd: str, sentinel: str) -> list[str]:
     """Monta o argv preservando cwd/estado entre comandos via arquivo sentinela.
 
-    O comando roda no diretório atual da sessão; ao final, o `pwd` resultante é
-    gravado no arquivo `sentinel` para que o próximo comando parta de lá.
+    O comando roda no diretório atual da sessão; ao final, o `pwd` resultante e o
+    ambiente (env/set) são gravados no arquivo `sentinel` para que o próximo
+    comando parta do mesmo diretório e com as variáveis de ambiente exportadas.
     """
     if IS_WINDOWS:
-        wrapper = f"{cmd}\r\n(Get-Location).Path | Out-File -Encoding utf8 '{sentinel}'"
+        wrapper = (
+            f"{cmd}\r\n"
+            f"(Get-Location).Path | Out-File -Encoding utf8 '{sentinel}'\r\n"
+            f"Get-ChildItem env: | ForEach-Object {{ \"$($_.Name)=$($_.Value)\" }} | "
+            f"Out-File -Append -Encoding utf8 '{sentinel}'\r\n"
+        )
         return ["powershell", "-NoProfile", "-NonInteractive", "-Command", wrapper]
-    wrapper = f"{cmd}\n__aisp_code=$?\npwd > {sentinel}\nexit $__aisp_code"
+    wrapper = (
+        f"{cmd}\n"
+        f"__aisp_code=$?\n"
+        f"pwd > {sentinel}\n"
+        f"env >> {sentinel}\n"
+        f"exit $__aisp_code"
+    )
     return ["bash", "-c", wrapper]
+
+
+def _parse_sentinel(path: str) -> tuple[str, dict]:
+    """Extrai (cwd, env) do arquivo sentinela.
+
+    A 1ª linha é o `pwd`; as demais são `CHAVE=VALOR` do ambiente. Retorna
+    cwd="" quando vazio e somente as entradas env com formato válido.
+    """
+    cwd = ""
+    env: dict[str, str] = {}
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return cwd, env
+    if lines:
+        cwd = lines[0].strip()
+    for line in lines[1:]:
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k:
+            env[k] = v
+    return cwd, env
 
 
 @app.get("/health")
@@ -198,13 +233,14 @@ def run(
         _log("run.error", level="error", rid=rid, error=repr(exc))
         raise
 
-    # Persiste o cwd resultante (após possível `cd`) para a próxima execução.
+    # Persiste cwd e ambiente (variáveis exportadas) para a próxima execução.
     try:
         if os.path.exists(sentinel):
-            new_cwd = Path(sentinel).read_text(encoding="utf-8", errors="replace").strip().splitlines()
-            new_cwd = new_cwd[-1].strip() if new_cwd else ""
+            new_cwd, new_env = _parse_sentinel(sentinel)
             if new_cwd and os.path.isdir(new_cwd):
                 session["cwd"] = new_cwd
+            if new_env:
+                session["env"] = new_env
     finally:
         try:
             os.remove(sentinel)

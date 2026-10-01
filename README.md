@@ -58,8 +58,10 @@ Variáveis: `AISHELLPLUG_TOKEN`, `AISHELLPLUG_HOST`, `AISHELLPLUG_PORT`,
 
 - Comandos **multilinha** são aceitos (ex.: `cd /tmp` + `echo ok` no mesmo bloco).
 - O **diretório de trabalho é preservado** entre comandos: após um `cd`, o próximo
-  comando já parte da nova pasta. O estado é por sessão (`sid`), identificado por
-  um id persistente da extensão; reiniciar o servidor volta ao cwd inicial.
+  comando já parte da nova pasta. Variáveis de ambiente **exportadas** também
+  persistem (`export FOO=bar` vale no próximo comando; `unset FOO` remove).
+  O estado é por sessão (`sid`), identificado por um id persistente da extensão;
+  reiniciar o servidor volta ao cwd/env iniciais.
 
 ## Testes
 ```bash
