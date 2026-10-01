@@ -1,0 +1,76 @@
+name: fs.write.guard
+description: >-
+  Verifica/escreve arquivos SOMENTE dentro de /home/junior/project/ai-shellplug/.
+  Bloqueia qualquer caminho fora dessa pasta. Use 'check=1' para só validar, ou
+  informe 'path' + 'content' para escrever com a proteção aplicada.
+kind: python
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: Caminho do arquivo (absoluto ou relativo à raiz permitida).
+    content:
+      type: string
+      description: Conteúdo a gravar. Se ausente, apenas valida o path.
+    check:
+      type: boolean
+      description: Se true, só valida a permissão do path (não escreve).
+    append:
+      type: boolean
+      description: Se true, concatena ao final em vez de sobrescrever.
+    mkdir:
+      type: boolean
+      description: Se true, cria diretórios pais antes de escrever.
+  required: [path]
+command: |
+  import os, sys, pathlib, json
+
+  ALLOWED = pathlib.Path("/home/junior/project/ai-shellplug").resolve()
+
+  raw = os.environ.get("ORCH_ARG_PATH", "")
+  content = os.environ.get("ORCH_ARG_CONTENT")
+  append = os.environ.get("ORCH_ARG_APPEND", "").lower() in ("1", "true", "yes")
+  mkdir = os.environ.get("ORCH_ARG_MKDIR", "").lower() in ("1", "true", "yes")
+  check = os.environ.get("ORCH_ARG_CHECK", "").lower() in ("1", "true", "yes")
+  if raw == "" and os.environ.get("ORCH_ARGS"):
+      try:
+          a = json.loads(os.environ["ORCH_ARGS"])
+      except Exception:
+          a = {}
+      raw = a.get("path", "")
+      content = a.get("content", content)
+      append = a.get("append", append)
+      mkdir = a.get("mkdir", mkdir)
+      check = a.get("check", check)
+
+  if not raw:
+      print("ERRO: parâmetro 'path' obrigatório", file=sys.stderr)
+      sys.exit(2)
+
+  target = pathlib.Path(raw)
+  if not target.is_absolute():
+      target = ALLOWED / target
+  target = target.resolve()
+
+  # Guarda: o alvo tem que estar contido em ALLOWED
+  try:
+      target.relative_to(ALLOWED)
+  except ValueError:
+      print(f"BLOQUEADO: '{target}' está fora de {ALLOWED}", file=sys.stderr)
+      print(f"permitido={ALLOWED}")
+      sys.exit(3)
+
+  if check or content is None:
+      exists = "sim" if target.exists() else "não"
+      print(f"PERMITIDO: {target} (existe: {exists})")
+      sys.exit(0)
+
+  if mkdir:
+      target.parent.mkdir(parents=True, exist_ok=True)
+
+  mode = "a" if append else "w"
+  with open(target, mode, encoding="utf-8") as f:
+      f.write(content)
+
+  print(f"OK: gravado {len(content)} bytes em {target}")

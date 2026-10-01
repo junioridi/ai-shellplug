@@ -1,0 +1,58 @@
+name: ai-shellplug
+description: agente do projeto ai-shellplug
+skills:
+- shell
+- http.request
+- fs.*
+- rag.*
+- llm.chat
+- agent.run
+- plan.*
+- skills.*
+- map_reduce
+- fs.write.guard
+context:
+  env: dev
+rag:
+  model: noop
+  sources:
+  - ./docs
+  - ./src
+  exclude:
+  - '**/target/**'
+  - '**/node_modules/**'
+  - '**/.git/**'
+policies:
+  allow_shell: true
+  write_allowed_paths:
+  - /home/junior/project/ai-shellplug
+  allowed_paths:
+  - /home/junior/project/ai-shellplug
+chat:
+  provider: deepseek
+  model: deepseek-chat
+  max_tokens: 4096
+  max_history_tokens: 16000
+  system_prompt: "Voce e um agente rodando LOCALMENTE na maquina do usuario.\nREGRAS:\n\
+    1. Execute voce mesmo via shell ou fs.*.\n2. Rode TODOS os comandos antes de responder.\n\
+    3. Se um comando falhar, reporte e continue.\n4. Responda em portugues, direto,\
+    \ sem preambulo.\n5. ESCREVA ARQUIVOS SOMENTE em /home/junior/project/ai-shellplug/.\n\
+    \   Nunca grave (fs.write/fs.edit/shell) fora dessa pasta.\n   Na duvida, valide\
+    \ o caminho com a skill `fs.write.guard` (check=true) antes.\n"
+  planning:
+    enabled: true
+    approval: auto
+    max_steps: 8
+  default_tools:
+  - fs.list
+  - fs.read
+  - fs.grep
+  - fs.edit
+  - fs.write
+  - shell
+  - http.request
+  - rag.query
+  - skills.create
+  - skills.list
+  - map_reduce
+  - fs.write.guard

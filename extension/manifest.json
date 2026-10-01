@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "ai-shellplug",
+  "version": "0.1.0",
+  "description": "Extrai blocos de comando das respostas do chat de IA e executa no servidor local.",
+  "permissions": ["storage", "scripting", "tabs"],
+  "host_permissions": [
+    "https://chat.deepseek.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ai-shellplug",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["https://chat.deepseek.com/*"]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font: 13px/1.4 system-ui, sans-serif; width: 340px; padding: 10px; }
+    label { display:block; margin: 6px 0 2px; }
+    input { width: 100%; box-sizing: border-box; }
+    button { margin-top: 6px; padding: 4px 8px; cursor: pointer; }
+    .muted { color:#888; }
+    #log { margin-top:10px; border-top:1px solid #ddd; padding-top:6px; }
+    #logList { max-height:180px; overflow:auto; font: 11px/1.35 monospace; background:#111; color:#ddd;
+               padding:6px; border-radius:6px; white-space:pre-wrap; }
+    .lv-info { color:#7fd6ff; }
+    .lv-warn { color:#ffd479; }
+    .lv-error { color:#ff7b7b; }
+    .lv-debug { color:#9a9; }
+  </style>
+</head>
+<body>
+  <label for="serverUrl">Servidor</label>
+  <input id="serverUrl" placeholder="http://127.0.0.1:8765" />
+  <label for="token">Token</label>
+  <input id="token" placeholder="change-me-local-token" />
+  <button id="save">Salvar</button>
+  <button id="approveAll">Aprovar tudo por 30 min</button>
+  <button id="health">Testar servidor</button>
+  <div id="status" class="muted"></div>
+
+  <div id="log">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong>Log</strong>
+      <button id="clear" style="margin:0">Limpar</button>
+    </div>
+    <div id="logList"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

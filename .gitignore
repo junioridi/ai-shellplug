@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Backups / temporários
+*.bak
+*.tmp
+*.log
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
