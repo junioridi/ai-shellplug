@@ -588,10 +588,18 @@
   // 4b. Injeta um botão "Executar" em cada bloco de código (classe md-code-block)
   //     renderizado no chat, permitindo rodar o comando direto pelo clique.
   function codeFromBlock(block) {
-    // O texto pode estar num <pre><code>, ou direto no bloco.
+    // O texto pode estar num <pre><code>, num <pre>, ou direto no bloco.
+    // Preferimos o <code> com textContent: o highlighter do site quebra o texto
+    // em <span>s e o innerText pode colapsar/perder trechos (ex.: "%MEM" -> "…").
+    const codeEl = block.querySelector && block.querySelector("pre code, code");
     const pre = block.querySelector && block.querySelector("pre");
-    const target = pre || block;
-    let text = target.innerText || target.textContent || "";
+    const target = codeEl || pre || block;
+    let text = target.textContent;
+    if (text == null) text = target.innerText || "";
+    // Normaliza caracteres invisíveis que o editor injeta entre tokens.
+    text = text
+      .replace(/[\u200b\u200c\u200d\ufeff]/g, "") // zero-width
+      .replace(/\u00a0/g, " "); // nbsp
     return text.replace(/\r/g, "").replace(/^\$\s+/gm, "").trimEnd();
   }
 
@@ -661,6 +669,6 @@
   }, 500);
 
   if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, resultToText, getLastResult: () => lastResult };
+    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, getLastResult: () => lastResult };
   }
 })();
