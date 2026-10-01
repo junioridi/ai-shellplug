@@ -58,7 +58,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const res = await fetch(cfg.serverUrl.replace(/\/$/, "") + "/run", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Token": cfg.token },
-          body: JSON.stringify({ cmd: msg.cmd, cwd: msg.cwd, timeout: msg.timeout }),
+          body: JSON.stringify({
+            cmd: msg.cmd,
+            cwd: msg.cwd,
+            timeout: msg.timeout,
+            sid: msg.sid || cfg.sid,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {

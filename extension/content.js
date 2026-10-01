@@ -14,6 +14,22 @@
   }
   window.__aispLoaded = true;
 
+  // sid persistente da página: garante cwd/env compartilhados entre comandos
+  // do mesmo bloco (e entre execuções da mesma aba), simulando um shell único.
+  function getSid() {
+    try {
+      let sid = sessionStorage.getItem("aisp_sid");
+      if (!sid) {
+        sid = "p_" + Math.random().toString(36).slice(2, 10);
+        sessionStorage.setItem("aisp_sid", sid);
+      }
+      return sid;
+    } catch (_) {
+      if (!window.__aispSid) window.__aispSid = "p_" + Math.random().toString(36).slice(2, 10);
+      return window.__aispSid;
+    }
+  }
+
   // Envia um log para o background (aparece no popup).
   function clog(level, msg) {
     try {
@@ -361,15 +377,75 @@
   }
 
   function resultToText(entry) {
-    const head = entry.denied
-      ? "negado"
-      : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
-    return `$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}`.trim();
+    // Comando único.
+    if (!entry || !entry.batch) {
+      const head = entry.denied
+        ? "negado"
+        : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
+      return `$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}`.trim();
+    }
+    // Batch: um bloco de código com vários comandos executados em sequência.
+    return entry.stages
+      .map((st) => {
+        const head = st.denied
+          ? "negado"
+          : `exit=${st.exit} (${st.duration_ms ?? "?"}ms)${st.timed_out ? " TIMEOUT" : ""}`;
+        return `$ ${st.cmd}\n${head}\n${st.stdout || ""}${st.stderr || ""}`.trim();
+      })
+      .join("\n\n");
+  }
+
+  // Divisão de um bloco de código em comandos executáveis (uma linha não vazia
+  // por comando). Linhas iniciadas por "#" viram comentários "/" e são ignoradas.
+  function splitBlockCommands(text) {
+    return String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"));
+  }
+
+  // Executa uma lista de comandos SEQUENCIALMENTE no mesmo sid (preserva cwd/env
+  // entre eles), com acumulação de resultados. auto=true pula a aprovação.
+  function runBlock(cmds, auto) {
+    const list = Array.isArray(cmds) ? cmds.filter(Boolean) : [cmds];
+    if (!list.length) return;
+    clog("info", `executando bloco (${list.length} comando${list.length > 1 ? "s" : ""})`);
+    if (list.length === 1) {
+      runCommand(list[0], auto);
+      return;
+    }
+    const batch = { cmd: list.join("\n"), batch: true, stages: [], done: 0, total: list.length };
+    results.push(batch);
+    lastResult = batch;
+    injectResult(batch);
+
+    const sid = getSid();
+    const step = (i) => {
+      if (i >= list.length) {
+        clog("info", `bloco concluído (${batch.done}/${batch.total})`);
+        return;
+      }
+      const cmd = list[i];
+      chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto, sid }, (res) => {
+        const st = { cmd, ...res };
+        batch.stages.push(st);
+        batch.done++;
+        lastResult = batch;
+        try {
+          injectResult(batch);
+        } catch (e) {
+          clog("warn", `falha ao renderizar resultado: ${e.message}`);
+        }
+        step(i + 1);
+      });
+    };
+    step(0);
   }
 
   function runCommand(cmd, auto) {
     clog("info", `enviando exec${auto ? " (auto)" : ""}: ${cmd}`);
-    chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto }, (res) => {
+    chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto, sid: getSid() }, (res) => {
       const entry = { cmd, ...res };
       results.push(entry);
       lastResult = entry;
@@ -454,6 +530,21 @@
       document.body.appendChild(box);
     }
     const body = box.querySelector(".aisp-result-body") || box;
+    // Batch: re-renderiza o conteúdo inteiro (acumulado) a cada etapa.
+    if (entry.batch) {
+      body.textContent = "";
+      entry.stages.forEach((st) => {
+        const h = st.denied
+          ? "❌ negado"
+          : `exit=${st.exit} (${st.duration_ms ?? "?"}ms)${st.timed_out ? " TIMEOUT" : ""}`;
+        body.textContent += `$ ${st.cmd}\n${h}\n${st.stdout || ""}${st.stderr || ""}\n\n`;
+      });
+      if (entry.done < entry.total) {
+        body.textContent += `… executando ${entry.done}/${entry.total}…`;
+      }
+      box.scrollTop = box.scrollHeight;
+      return;
+    }
     const head = entry.denied
       ? "❌ negado"
       : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
@@ -494,9 +585,9 @@
       btn.onclick = (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        // Blocos podem ter múltiplas linhas: envia o script inteiro.
-        // Executa imediatamente, sem popup de confirmação.
-        runCommand(cmd, true);
+        // Blocos podem ter múltiplas linhas: cada linha é um comando, executado
+        // em sequência (mesmo sid → cwd/env preservados). Sem popup de confirmação.
+        runBlock(splitBlockCommands(cmd), true);
       };
       // Insere logo antes do <pre>/bloco, se possível.
       const pre = block.querySelector && block.querySelector("pre");
@@ -537,6 +628,6 @@
   }, 500);
 
   if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, getLastResult: () => lastResult };
+    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, resultToText, getLastResult: () => lastResult };
   }
 })();

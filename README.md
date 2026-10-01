@@ -44,6 +44,9 @@ Variáveis: `AISHELLPLUG_TOKEN`, `AISHELLPLUG_HOST`, `AISHELLPLUG_PORT`,
    ````
 4. O bloco traz um botão **▶ Executar** que roda o comando **imediatamente, sem popup**.
    O resultado é injetado abaixo do bloco e aparece no log do servidor.
+   **Blocos multi-linha** rodam **linha por linha, em sequência**, no mesmo `sid` —
+   o `cwd`/`env` de cada linha influencia a próxima (ex.: `cd /tmp` + `pwd` → `/tmp`).
+   Linhas iniciadas por `#` são tratadas como comentário e ignoradas.
    A detecção automática por streaming continua usando o banner
    **Executar / Executar tudo até parar / Ignorar** (com confirmação).
 5. Acima do composer aparece o botão **📋 Colar último resultado**: ele insere

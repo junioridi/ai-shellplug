@@ -34,8 +34,10 @@ const document = {
   querySelectorAll: () => [], addEventListener: () => {},
 };
 let lastSent = null;
+const sent = [];
+const sessionStorage = { _s:{}, getItem(k){ return this._s[k] ?? null; }, setItem(k,v){ this._s[k]=String(v); }, removeItem(k){ delete this._s[k]; } };
 const chrome = {
-  runtime: { getURL: (u) => u, sendMessage: (m, cb) => { lastSent = m; cb && cb({ ok:true, entry:{} }); }, onMessage: { addListener(){} } },
+  runtime: { getURL: (u) => u, sendMessage: (m, cb) => { lastSent = m; sent.push(m); cb && cb({ ok:true, entry:{} }); }, onMessage: { addListener(){} } },
   storage: { local: { get(){}, set(){} }, onChanged: { addListener(){} } },
 };
 const window = { addEventListener(){}, postMessage(){}, __postMessage(){}, __dbg:[], };
@@ -43,8 +45,8 @@ class MutationObserver { constructor(cb){ this.cb=cb; } observe(t){ if(t===docum
 
 const src = fs.readFileSync(path.join(__dirname,"content.js"),"utf8");
 const mod = { exports: {} };
-new Function("mod","window","document","chrome","console","MutationObserver","fetch","setTimeout",
-  src + "\nreturn mod.exports;")(mod, window, document, chrome, { log(){}, info(){}, error(){} }, MutationObserver, () => {}, setTimeout);
+new Function("mod","window","document","chrome","console","MutationObserver","fetch","setTimeout","sessionStorage",
+  src + "\nreturn mod.exports;")(mod, window, document, chrome, { log(){}, info(){}, error(){} }, MutationObserver, () => {}, setTimeout, sessionStorage);
 
 // Monta um bloco .md-code-block com <pre>
 const block = mkEl("div"); block.classList.add("md-code-block");
@@ -60,6 +62,8 @@ const btn = block.querySelectorAll(".aisp-run-btn")[0];
 const ok = (b,m)=>console.log((b?"PASS":"FAIL"),m);
 ok(!!btn, "botão Executar injetado no .md-code-block");
 btn && btn.onclick({ preventDefault(){}, stopPropagation(){} });
-ok(lastSent && lastSent.type === "exec", "clique dispara exec");
-ok(lastSent && lastSent.auto === true, "exec dispara sem popup (auto:true)");
-ok(lastSent && lastSent.cmd === "ls -al\necho oi", "cmd extraído sem o prefixo '$ ' (got: " + JSON.stringify(lastSent && lastSent.cmd) + ")");
+const execs = sent.filter(m => m.type === "exec");
+ok(execs.length === 2, "clique dispara um exec por linha (got " + execs.length + ")");
+ok(execs.every(m => m.auto === true), "cada exec sem popup (auto:true)");
+ok(execs.map(m => m.cmd).join("\n") === "ls -al\necho oi", "cmds extraídos sem o prefixo '$ ' (got: " + JSON.stringify(execs.map(m => m.cmd)) + ")");
+ok(execs[0] && execs[0].sid && execs[0].sid === execs[1].sid, "mesmo sid entre comandos do bloco");
