@@ -153,7 +153,9 @@
     const cmds = extractCommands(text);
     for (const cmd of cmds) {
       if (!markSeen(cmd)) continue; // duplicata dentro da janela
-      clog("info", `comando detectado: ${cmd}`);
+      // Diagnóstico: guarda o texto-fonte no log para investigar truncamentos
+      // de comando (ex.: "cat /tmp/c.txt" chegando como "cat /tmp").
+      clog("debug", `comando detectado: ${cmd} | fonte: ${JSON.stringify(String(text).slice(0, 400))}`);
       runCommand(cmd);
     }
   }
