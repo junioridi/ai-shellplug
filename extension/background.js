@@ -6,10 +6,15 @@ const DEFAULTS = {
   serverUrl: "http://127.0.0.1:8765",
   token: "change-me-local-token",
   autoApproveUntil: 0, // timestamp (ms) até quando aprovar tudo automaticamente
+  sid: "", // identificador de sessão do shell (persiste cwd entre comandos)
 };
 
 async function getCfg() {
   const cfg = await chrome.storage.local.get(DEFAULTS);
+  if (!cfg.sid) {
+    cfg.sid = "web-" + Math.random().toString(36).slice(2, 10);
+    await chrome.storage.local.set({ sid: cfg.sid });
+  }
   return { ...DEFAULTS, ...cfg };
 }
 

@@ -19,6 +19,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -44,6 +45,21 @@ MAX_LOG_TEXT = int(os.environ.get("AISHELLPLUG_LOG_MAXTEXT", "4000"))
 
 IS_WINDOWS = platform.system().lower().startswith("win")
 
+# Estado de shell por sessão (sid). Preserva o diretório de trabalho (e variáveis
+# de ambiente exportadas) entre comandos, como num shell interativo. Fica só em
+# memória: reiniciar o servidor volta ao cwd inicial.
+DEFAULT_SID = "default"
+_sessions: dict[str, dict] = {}
+
+
+def _session(sid: str) -> dict:
+    """Retorna (criando se preciso) o estado da sessão `sid`."""
+    s = _sessions.get(sid)
+    if s is None:
+        s = {"cwd": os.getcwd(), "env": {}}
+        _sessions[sid] = s
+    return s
+
 app = FastAPI(title="ai-shellplug", version="0.1.0")
 
 # A página roda em https://chat.deepseek.com; o fetch é feito pelo service worker
@@ -60,6 +76,7 @@ class RunRequest(BaseModel):
     cmd: str
     cwd: Optional[str] = None
     timeout: Optional[int] = None
+    sid: Optional[str] = None
 
 
 LEVELS = {"debug": 10, "info": 20, "warn": 30, "error": 40}
@@ -95,10 +112,17 @@ def _log(event: str, level: str = "info", **fields) -> None:
     print(f"[{level}] {event} " + json.dumps(fields, ensure_ascii=False), flush=True)
 
 
-def _build_argv(cmd: str) -> list[str]:
+def _build_argv(cmd: str, sentinel: str) -> list[str]:
+    """Monta o argv preservando cwd/estado entre comandos via arquivo sentinela.
+
+    O comando roda no diretório atual da sessão; ao final, o `pwd` resultante é
+    gravado no arquivo `sentinel` para que o próximo comando parta de lá.
+    """
     if IS_WINDOWS:
-        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd]
-    return ["bash", "-c", cmd]
+        wrapper = f"{cmd}\r\n(Get-Location).Path | Out-File -Encoding utf8 '{sentinel}'"
+        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", wrapper]
+    wrapper = f"{cmd}\n__aisp_code=$?\npwd > {sentinel}\nexit $__aisp_code"
+    return ["bash", "-c", wrapper]
 
 
 @app.get("/health")
@@ -115,17 +139,24 @@ def run(
 ) -> JSONResponse:
     rid = uuid.uuid4().hex[:8]
     client = request.client.host if request.client else "?"
-    cmd = (req.cmd or "").strip()
-    cwd = req.cwd or os.getcwd()
+    cmd = req.cmd or ""
+    sid = req.sid or DEFAULT_SID
+    session = _session(sid)
+    # cwd explícito sobrepõe o da sessão (permitindo reset); senão usa o preservado.
+    base_cwd = req.cwd or session["cwd"]
+    if req.cwd:
+        session["cwd"] = req.cwd
     timeout = req.timeout or DEFAULT_TIMEOUT
 
     _log(
         "run.start",
         rid=rid,
+        sid=sid,
         client=client,
         cmd=_truncate(cmd),
-        cwd=cwd,
+        cwd=base_cwd,
         timeout=timeout,
+        multiline=("\n" in cmd),
         has_token=bool(x_token),
     )
 
@@ -133,18 +164,21 @@ def run(
         _log("run.auth_fail", level="warn", rid=rid, client=client, reason="token inválido")
         raise HTTPException(status_code=401, detail="token inválido")
 
-    if not cmd:
+    if not cmd.strip():
         _log("run.bad_request", level="warn", rid=rid, reason="cmd vazio")
         raise HTTPException(status_code=400, detail="cmd vazio")
 
     started = time.monotonic()
-    argv = _build_argv(cmd)
-    _log("run.exec", level="debug", rid=rid, argv=argv)
+    sentinel = os.path.join(tempfile.gettempdir(), f"aisp_cwd_{rid}")
+    argv = _build_argv(cmd, sentinel)
+    env = {**os.environ, **session.get("env", {})}
+    _log("run.exec", level="debug", rid=rid, argv=argv, sid=sid)
 
     try:
         proc = subprocess.run(
             argv,
-            cwd=cwd,
+            cwd=base_cwd,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -164,6 +198,19 @@ def run(
         _log("run.error", level="error", rid=rid, error=repr(exc))
         raise
 
+    # Persiste o cwd resultante (após possível `cd`) para a próxima execução.
+    try:
+        if os.path.exists(sentinel):
+            new_cwd = Path(sentinel).read_text(encoding="utf-8", errors="replace").strip().splitlines()
+            new_cwd = new_cwd[-1].strip() if new_cwd else ""
+            if new_cwd and os.path.isdir(new_cwd):
+                session["cwd"] = new_cwd
+    finally:
+        try:
+            os.remove(sentinel)
+        except OSError:
+            pass
+
     duration_ms = int((time.monotonic() - started) * 1000)
     if isinstance(stdout, bytes):
         stdout = stdout.decode("utf-8", "replace")
@@ -174,10 +221,12 @@ def run(
         "run.done",
         level="warn" if (code != 0 or timed_out) else "info",
         rid=rid,
+        sid=sid,
         cmd=_truncate(cmd),
         exit=code,
         timed_out=timed_out,
         duration_ms=duration_ms,
+        cwd=session["cwd"],
         stdout=_truncate(stdout),
         stderr=_truncate(stderr),
     )
@@ -185,6 +234,8 @@ def run(
     return JSONResponse(
         {
             "rid": rid,
+            "sid": sid,
+            "cwd": session["cwd"],
             "exit": code,
             "timed_out": timed_out,
             "duration_ms": duration_ms,

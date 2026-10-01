@@ -56,6 +56,11 @@ Variáveis: `AISHELLPLUG_TOKEN`, `AISHELLPLUG_HOST`, `AISHELLPLUG_PORT`,
 - **Risco:** é shell livre disparado por texto vindo de um site de terceiros.
   Não exponha a porta, use token forte, e revise o modo auto.
 
+- Comandos **multilinha** são aceitos (ex.: `cd /tmp` + `echo ok` no mesmo bloco).
+- O **diretório de trabalho é preservado** entre comandos: após um `cd`, o próximo
+  comando já parte da nova pasta. O estado é por sessão (`sid`), identificado por
+  um id persistente da extensão; reiniciar o servidor volta ao cwd inicial.
+
 ## Testes
 ```bash
 node extension/test_parser.js        # parser + manifest + sintaxe JS
