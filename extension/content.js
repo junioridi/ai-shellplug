@@ -437,7 +437,10 @@
       const head = entry.denied
         ? "negado"
         : `exit=${entry.exit} (${entry.duration_ms ?? "?"}ms)${entry.timed_out ? " TIMEOUT" : ""}`;
-      return `$ ${entry.cmd}\n${head}\n${entry.stdout || ""}${entry.stderr || ""}`.trim();
+      const rawNote = entry.raw && entry.raw !== entry.cmd
+        ? `### raw do bloco\n${entry.raw}\n### fim raw\n`
+        : "";
+      return `$ ${entry.cmd}\n${head}\n${rawNote}${entry.stdout || ""}${entry.stderr || ""}`.trim();
     }
     // Batch: um bloco de código com vários comandos executados em sequência.
     return entry.stages
@@ -521,15 +524,15 @@
 
   // Executa uma lista de comandos SEQUENCIALMENTE no mesmo sid (preserva cwd/env
   // entre eles), com acumulação de resultados. auto=true pula a aprovação.
-  function runBlock(cmds, auto) {
+  function runBlock(cmds, auto, raw) {
     const list = Array.isArray(cmds) ? cmds.filter(Boolean) : [cmds];
     if (!list.length) return;
     clog("info", `executando bloco (${list.length} comando${list.length > 1 ? "s" : ""})`);
     if (list.length === 1) {
-      runCommand(list[0], auto);
+      runCommand(list[0], auto, raw);
       return;
     }
-    const batch = { cmd: list.join("\n"), batch: true, stages: [], done: 0, total: list.length };
+    const batch = { cmd: list.join("\n"), raw: raw || cmds, batch: true, stages: [], done: 0, total: list.length };
     results.push(batch);
     pushOutput(batch);
 
@@ -541,7 +544,7 @@
       }
       const cmd = list[i];
       chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto, sid }, (res) => {
-        const st = { cmd, ...res };
+        const st = { cmd, raw: raw || cmds, ...res };
         batch.stages.push(st);
         batch.done++;
         lastResult = batch;
@@ -556,10 +559,10 @@
     step(0);
   }
 
-  function runCommand(cmd, auto) {
+  function runCommand(cmd, auto, raw) {
     clog("info", `enviando exec${auto ? " (auto)" : ""}: ${cmd}`);
     chrome.runtime.sendMessage({ type: "exec", cmd, auto: !!auto, sid: getSid() }, (res) => {
-      const entry = { cmd, ...res };
+      const entry = { cmd, raw: raw != null ? raw : cmd, ...res };
       results.push(entry);
       try {
         pushOutput(entry);
@@ -834,6 +837,42 @@
     }
   }
 
+  // --- Diagnóstico: raw dos blocos ---
+  // Guarda, para cada md-code-block visto, o texto interno CRU (o que está no
+  // inner do bloco) + o comando que o parser extraiu. Fica em
+  // chrome.storage.local.rawBlocks para o popup mostrar e o usuário comparar
+  // onde o truncamento acontece.
+  const RAW_KEY = "rawBlocks";
+  const RAW_MAX = 40;
+
+  function innerOf(block) {
+    try {
+      return block && (block.innerText != null ? block.innerText : block.textContent) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function captureRawBlock(block, cmd) {
+    try {
+      const raw = innerOf(block);
+      if (!raw) return;
+      const rec = { ts: Date.now(), raw, cmd };
+      chrome.storage.local.get({ [RAW_KEY]: [] }, (o) => {
+        if (chrome.runtime.lastError) return;
+        const arr = Array.isArray(o[RAW_KEY]) ? o[RAW_KEY] : [];
+        // evita duplicar o mesmo raw colado em sequência (ex.: re-render do stream)
+        const last = arr[arr.length - 1];
+        if (last && last.raw === raw && last.cmd === cmd) return;
+        arr.push(rec);
+        chrome.storage.local.set({ [RAW_KEY]: arr.slice(-RAW_MAX) });
+      });
+      clog("debug", "raw do bloco capturado: " + JSON.stringify(raw).slice(0, 120));
+    } catch (e) {
+      clog("warn", "captureRawBlock falhou: " + e);
+    }
+  }
+
   function attachRunButtons(root) {
     const scope = root && typeof root.querySelectorAll === "function" ? root : document;
     if (!scope || typeof scope.querySelectorAll !== "function") return;
@@ -844,6 +883,9 @@
       if (block.querySelector && block.querySelector(".aisp-run-btn")) return; // já tem
       const cmd = codeFromBlock(block);
       if (!cmd) return;
+      // Diagnóstico de truncamento: guarda o inner cru do bloco e o comando
+      // que o parser extraiu, para inspeção no popup.
+      captureRawBlock(block, cmd);
       // Só oferece execução para blocos que parecem shell/console.
       if (!/[a-zA-Z]/.test(cmd)) return;
       const btn = document.createElement("button");
@@ -860,7 +902,7 @@
         // Blocos podem ter múltiplas linhas: cada linha é um comando, executado
         // em sequência (mesmo sid → cwd/env preservados). Sem popup de confirmação.
         grayOutRunButton(btn);
-        runBlock(splitBlockCommands(cmd), true);
+        runBlock(splitBlockCommands(cmd), true, cmd);
       };
       // Insere logo antes do <pre>/bloco, se possível.
       const pre = block.querySelector && block.querySelector("pre");

@@ -38,7 +38,58 @@ async function load() {
   $("status").textContent = "config atual: token=" + (cfg.token || "(vazio)").slice(0, 6) + "…";
   const { aispLog } = await chrome.storage.local.get({ aispLog: [] });
   renderLog(aispLog);
+  const { rawBlocks } = await chrome.storage.local.get({ rawBlocks: [] });
+  renderRaw(rawBlocks);
 }
+
+// Renderiza o raw (inner) dos md-code-blocks capturados, para diagnosticar
+// truncamento. Cada item mostra o texto cru e o comando que o parser extraiu.
+function renderRaw(items) {
+  const list = $("rawList");
+  if (!list) return;
+  if (!items || !items.length) {
+    list.innerHTML = '<span class="muted">(vazio)</span>';
+    return;
+  }
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  list.innerHTML = items
+    .map((it) => {
+      const raw = esc(it.raw || "");
+      const cmd = esc(it.cmd || "(nenhum)");
+      return `<div class="rawItem">${fmt(it.ts)} <span class="rawCmd">→ ${cmd}</span>\n` +
+             `RAW: ${JSON.stringify(raw)}\n${raw}</div>`;
+    })
+    .join("");
+}
+
+// Comando manual: envia direto ao servidor via background, sem passar pelo
+// parser, para o usuário testar o comando exato que falhou.
+async function runManual() {
+  const cmd = $("manualCmd").value;
+  const out = $("manualOut");
+  if (!cmd.trim()) return;
+  out.style.display = "block";
+  out.textContent = "executando…";
+  const res = await chrome.runtime.sendMessage({ type: "exec", cmd, auto: true });
+  if (!res) { out.textContent = "sem resposta do background"; return; }
+  const parts = [];
+  if (res.error) parts.push("error: " + res.error);
+  if (res.exit !== undefined) parts.push("exit=" + res.exit);
+  if (res.out) parts.push(res.out);
+  if (res.err) parts.push("stderr: " + res.err);
+  out.textContent = parts.join("\n") || "(sem saída)";
+}
+
+$("runManual").onclick = runManual;
+$("useLastRaw").onclick = async () => {
+  const { rawBlocks } = await chrome.storage.local.get({ rawBlocks: [] });
+  const last = rawBlocks && rawBlocks[rawBlocks.length - 1];
+  if (last) $("manualCmd").value = last.raw;
+};
+$("clearRaw").onclick = async () => {
+  await chrome.storage.local.set({ rawBlocks: [] });
+  renderRaw([]);
+};
 
 async function save() {
   const serverUrl = $("serverUrl").value.trim();
@@ -95,6 +146,7 @@ $("health").onclick = async () => {
 // Atualiza o log em tempo real enquanto o popup está aberto.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.aispLog) renderLog(changes.aispLog.newValue);
+  if (area === "local" && changes.rawBlocks) renderRaw(changes.rawBlocks.newValue);
 });
 
 load();

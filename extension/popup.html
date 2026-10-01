@@ -15,6 +15,12 @@
     .lv-warn { color:#ffd479; }
     .lv-error { color:#ff7b7b; }
     .lv-debug { color:#9a9; }
+    #raw { margin-top:10px; border-top:1px solid #ddd; padding-top:6px; }
+    #rawList { max-height:160px; overflow:auto; font: 11px/1.35 monospace; background:#141; color:#cfc;
+               padding:6px; border-radius:6px; white-space:pre-wrap; margin-top:4px; }
+    #rawList .rawItem { border-bottom:1px dashed #353; padding:4px 0; }
+    #rawList .rawCmd { color:#9f9; }
+    #manualOut { display:none; }
   </style>
 </head>
 <body>
@@ -30,6 +36,27 @@
   <button id="approveAll">Aprovar tudo por 30 min</button>
   <button id="health">Testar servidor</button>
   <div id="status" class="muted"></div>
+
+  <div id="manual" style="margin-top:10px;border-top:1px solid #ddd;padding-top:6px">
+    <label for="manualCmd">Comando manual (roda direto no servidor, ignora o parser)</label>
+    <textarea id="manualCmd" rows="3" spellcheck="false"
+      placeholder="cat /tmp/c.txt"
+      style="width:100%;box-sizing:border-box;font:11px/1.35 monospace"></textarea>
+    <div style="display:flex;gap:6px;margin-top:4px">
+      <button id="runManual" style="margin:0">Executar</button>
+      <button id="useLastRaw" style="margin:0">Usar último raw do bloco</button>
+    </div>
+    <div id="manualOut" class="muted" style="font:11px/1.35 monospace;white-space:pre-wrap;
+      background:#111;color:#ddd;border-radius:6px;padding:6px;margin-top:6px;max-height:140px;overflow:auto;display:none"></div>
+  </div>
+
+  <div id="raw">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong>Raw dos blocos (inner do md-code-block)</strong>
+      <button id="clearRaw" style="margin:0">Limpar</button>
+    </div>
+    <div id="rawList"></div>
+  </div>
 
   <div id="log">
     <div style="display:flex;justify-content:space-between;align-items:center">
