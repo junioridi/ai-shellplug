@@ -45,14 +45,98 @@
   (document.head || document.documentElement).appendChild(s);
   clog("info", "content script carregado; inject.js injetado");
 
-  // 2. Ouvir os chunks que o inject.js capturou
+  // 2. Ouvir os chunks que o inject.js capturou.
+  //
+  // IMPORTANTE: o DeepSeek faz streaming do bloco de código em VÁRIOS chunks
+  // SSE (cada um com ~300-400 bytes). O código anterior fazia
+  //   lastText = ev.data.text
+  // substituindo o texto a cada chunk — então maybeRunFromText() só enxergava
+  // o último fragmento e o comando chegava truncado. Agora ACUMULAMOS por
+  // `kind` e só processamos quando o stream fica inativo (debounce) ou o
+  // buffer fica grande, sempre a partir do conteúdo COMPLETO.
   let lastText = "";
+  const CHUNK_MAX = 2_000_000; // teto de segurança (mesmo limite do inject.js = 200000)
+  const CHUNK_SETTLE_MS = 250; // inatividade mínima p/ considerar o stream terminado
+  const bufByKind = Object.create(null);
+  const settleTimers = Object.create(null);
+
+  // Extrai os "deltas de texto" de um bloco SSE. Cada linha `data: {json}`
+  // pode conter o fragmento do conteúdo do modelo em algum campo string
+  // (o DeepSeek usa envelopes JSON variados, ex.: {"v":"...","p":"append"}).
+  // Aqui desempacotamos o JSON e CONCATENAMOS os valores string na ordem em
+  // que aparecem — é isso que reconstrói o texto do bloco de código, em vez
+  // de acumular envelopes JSON crus (que o regex de comando não entende).
+  function sseDeltas(raw) {
+    const out = [];
+    const lines = String(raw || "").split(/\r?\n/);
+    for (let ln of lines) {
+      if (/^\s*(event:|id:|retry:|:\s)/.test(ln)) continue;
+      if (ln.startsWith("data:")) ln = ln.slice(5).replace(/^\s/, "");
+      if (!ln) continue;
+      const s = ln.trim();
+      if (s === "[DONE]") continue;
+      if (s.startsWith("{") || s.startsWith("[")) {
+        try {
+          const obj = JSON.parse(s);
+          collectStrings(obj, out);
+          continue;
+        } catch (_) {
+          // JSON partido entre chunks: cai no fallback de texto cru abaixo.
+        }
+      }
+      out.push(ln);
+    }
+    return out.join("");
+  }
+
+  // Varre um objeto JSON concatenando os valores string (deep-first), ignorando
+  // chaves/enum de CONTROLE do protocolo (papel, tipo, operacao de stream).
+  const CTL_KEYS = new Set(["role", "id", "type", "model", "p", "o", "op", "event", "finish_reason"]);
+  const CTL_VALS = new Set(["append", "replace", "assistant", "user", "system", "none", "stop"]);
+  function collectStrings(node, out, parentKey) {
+    if (node == null) return;
+    if (typeof node === "string") {
+      if (!CTL_VALS.has(node)) out.push(node);
+      return;
+    }
+    if (Array.isArray(node)) { for (const it of node) collectStrings(it, out, parentKey); return; }
+    if (typeof node === "object") {
+      for (const k of Object.keys(node)) {
+        if (CTL_KEYS.has(k)) continue;
+        collectStrings(node[k], out, k);
+      }
+    }
+  }
+
+  function stripSseNoise(s) {
+    // Mantido por compatibilidade/observabilidade: devolve o texto útil de um
+    // blob SSE (sem envelope), usando o mesmo desempacotador dos chunks.
+    return sseDeltas(s);
+  }
+
+  function onChunk(kind, raw) {
+    const text = sseDeltas(raw);
+    if (!text) return;
+    let buf = bufByKind[kind];
+    if (buf == null) buf = "";
+    buf += text;
+    if (buf.length > CHUNK_MAX) buf = buf.slice(-CHUNK_MAX);
+    bufByKind[kind] = buf;
+    lastText = buf;
+    clog("debug", `chunk (kind=${kind}, +${text.length} bytes, buffer=${buf.length})`);
+
+    clearTimeout(settleTimers[kind]);
+    settleTimers[kind] = setTimeout(() => {
+      const full = bufByKind[kind] || "";
+      bufByKind[kind] = ""; // começa novo ciclo no próximo stream
+      if (full) maybeRunFromText(full);
+    }, CHUNK_SETTLE_MS);
+  }
+
   window.addEventListener("message", (ev) => {
     if (!ev.data || ev.data.tag !== TAG) return;
     if (ev.data.kind === "chunk" || ev.data.kind === "ws" || ev.data.kind === "fetch") {
-      lastText = ev.data.text || "";
-      if (lastText) clog("debug", `chunk recebido (${lastText.length} bytes)`);
-      maybeRunFromText(lastText);
+      onChunk(ev.data.kind, ev.data.text || "");
     }
   });
 
@@ -107,28 +191,38 @@
   }
 
   function extractCommands(text) {
+    // O hook fetch/WS entrega o texto como esta na stream SSE do DeepSeek:
+    // markdown dentro de JSON, com aspas/linhas escapadas. Processa cada
+    // variante (desescapada e crua) em SEPARADO e usa a primeira que render
+    // comandos; misturar as duas gerava duplicatas quase-iguais
+    // (`printf "%s\n" "a` e `printf "%s` + `"a`), o que aparecia como truncado.
+    for (const variant of [unescapeSse(text), text]) {
+      const out = _extractFromVariant(variant);
+      if (out.length) return out;
+    }
+    return [];
+  }
+
+  function _extractFromVariant(variant) {
     const out = [];
     let m;
-
-    // O hook fetch/WS entrega o texto como está na stream SSE do DeepSeek:
-    // markdown dentro de JSON, com aspas/linhas escapadas (\", \n). Desescapa
-    // uma passada para que os regexes de bloco fenced/inline casem.
     const candidates = [];
-    for (const variant of [text, unescapeSse(text)]) {
-      FENCED_RE.lastIndex = 0;
-      while ((m = FENCED_RE.exec(variant)) !== null) candidates.push(m[1]);
-      INLINE_RE.lastIndex = 0;
-      while ((m = INLINE_RE.exec(variant)) !== null) candidates.push(m[0]);
-      SH_FENCED_RE.lastIndex = 0;
-      while ((m = SH_FENCED_RE.exec(variant)) !== null) candidates.push({ kind: "sh", body: m[1] });
-    }
+    FENCED_RE.lastIndex = 0;
+    while ((m = FENCED_RE.exec(variant)) !== null) candidates.push(m[1]);
+    INLINE_RE.lastIndex = 0;
+    while ((m = INLINE_RE.exec(variant)) !== null) candidates.push(m[0]);
+    SH_FENCED_RE.lastIndex = 0;
+    while ((m = SH_FENCED_RE.exec(variant)) !== null) candidates.push({ kind: "sh", body: m[1] });
 
     for (const raw of candidates) {
       if (raw && typeof raw === "object" && raw.kind === "sh") {
-        for (const line of raw.body.split(/\n/)) {
-          const cmd = line.trim().replace(/^\$\s*/, ""); // remove prompt "$ "
-          if (cmd && !cmd.startsWith("#") && !out.includes(cmd)) out.push(cmd);
-        }
+        // Um bloco ```bash/```sh é UM script: executa inteiro, como colado no
+        // terminal. NÃO dividir por linha — isso destruiria heredocs
+        // (`cat > f <<'EOF' ... EOF`), `set -e`, pipes multilinha e
+        // continuações (`\`). Cada fragmento virava um request separado e o
+        // heredoc chegava quebrado. Só remove prompts "$ " do início de linha.
+        const cmd = raw.body.replace(/^\$ /gm, "").replace(/\s+$/, "");
+        if (cmd && !out.includes(cmd)) out.push(cmd);
         continue;
       }
       const cmd = _tryCmd(String(raw).trim());
@@ -138,8 +232,14 @@
   }
 
   // Desescapa JSON-string comum vindo do SSE: \" -> "  \\ -> \  \n -> newline.
+  // IMPORTANTE: só faz sentido quando o texto é de fato uma stream JSON-escapada
+  // (assinatura: contém a sequência \" ou o prefixo \"data:\"). Um bloco de código
+  // JÁ renderizado pode conter backslashes LITERAIS (ex.: `tr "\0" "\n"`),
+  // e desescapá-lo transformaria o \n de dentro das aspas em quebra de linha,
+  // truncando/corrompendo o comando. Sem a assinatura, devolve intacto.
   function unescapeSse(s) {
     if (!s || s.indexOf("\\") === -1) return s;
+    if (!/\\"|data:\s*\{/.test(s)) return s; // não parece JSON-escapado
     return s
       .replace(/\\"/g, '"')
       .replace(/\\n/g, "\n")
@@ -484,11 +584,45 @@
   // que estejam dentro de aspas simples/duplas (ex.: echo 'a<newline>b').
   function splitBlockCommands(text) {
     const src = String(text || "").replace(/\r/g, "");
+    const lines = src.split("\n");
     const out = [];
+    let heredoc = null; // { delim, strip }
+    let acc = null; // acumulador multi-linha do heredoc
+    for (const line of lines) {
+      if (heredoc) {
+        acc.push(line);
+        const probe = heredoc.strip ? line.replace(/^\t+/, "") : line;
+        if (probe === heredoc.delim) {
+          out.push(acc.join("\n"));
+          acc = null;
+          heredoc = null;
+        }
+        continue;
+      }
+      // Abre heredoc? (<<EOF / <<'EOF' / <<"EOF" / <<-EOF) e nada fecha na linha.
+      const m = line.match(/<<(-?)\s*(?:(['"])([A-Za-z_][A-Za-z0-9_]*)\2|([A-Za-z_][A-Za-z0-9_]*))/);
+      if (m) {
+        heredoc = { delim: m[3] || m[4], strip: m[1] === "-" };
+        acc = [line];
+        continue;
+      }
+      // Linha normal: mantém o comportamento antigo — fatia por ';' respeitando
+      // aspas/escapes, e cada pedaço é um comando.
+      for (const piece of splitOnSemicolons(line)) out.push(piece);
+    }
+    // Heredoc não fechado (comando truncado): emite o que acumulou, para o bash
+    // reportar o erro real em vez de perder o texto.
+    if (acc) out.push(acc.join("\n"));
+    return out.map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  }
+
+  // Fatia UMA linha por ';' respeitando aspas simples/duplas e escapes.
+  function splitOnSemicolons(line) {
+    const parts = [];
     let cur = "";
-    let quote = null; // "'" ou '"' quando dentro de aspas
-    for (let i = 0; i < src.length; i++) {
-      const ch = src[i];
+    let quote = null;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
       if (quote) {
         cur += ch;
         if (ch === quote) quote = null;
@@ -500,26 +634,19 @@
         continue;
       }
       if (ch === "\\") {
-        // mantém a sequência de escape intacta (ex.: \" ou \')
         cur += ch;
-        if (i + 1 < src.length) {
-          cur += src[i + 1];
-          i++;
-        }
+        if (i + 1 < line.length) cur += line[++i];
         continue;
       }
-      // ";" separa comandos, MAS não quebramos nada aqui por causa de "/".
-      if (ch === "\n" || ch === ";") {
-        out.push(cur);
+      if (ch === ";") {
+        parts.push(cur);
         cur = "";
         continue;
       }
       cur += ch;
     }
-    out.push(cur);
-    return out
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("#"));
+    parts.push(cur);
+    return parts;
   }
 
   // Executa uma lista de comandos SEQUENCIALMENTE no mesmo sid (preserva cwd/env
@@ -765,13 +892,32 @@
         ? node.nodeValue
         : "";
     }
+    // Em blocos de código (PRE/CODE), o highlighter costuma emitir um elemento
+    // por LINHA (ex.: <div>, <span>) SEM <br> nem nó de quebra entre eles.
+    // Sem inserir "\n" entre filhos-elemento, as linhas colam
+    // ("...<<'EOF'[Desktop Entry]...EOF") e heredocs chegam truncados ao bash
+    // (warning: "here-document ... delimited by end-of-file").
+    // A quebra só se aplica DIRETAMENTE em PRE/CODE: dentro de um <div> da
+    // linha, os <span> são tokens da MESMA linha (não devem ser separados).
+    const lineCtx = node.tagName === "PRE" || node.tagName === "CODE";
+    let prevWasElem = false;
+    let seenLine = false;
     for (const ch of kids) {
       if (ch.nodeType === 3 /* texto */) {
         out += ch.nodeValue != null ? ch.nodeValue : ch.textContent || "";
+        prevWasElem = false;
       } else if (ch.tagName === "BR") {
         out += "\n";
+        prevWasElem = false;
       } else {
+        // Em PRE/CODE, cada filho-elemento é UMA linha — inclusive quando vazio
+        // (linha em branco entre trechos do heredoc). Inserimos o "\n" antes de
+        // TODO filho-elemento após o primeiro, sem colapsar quebras consecutivas,
+        // para que um <div></div> vazio produza sua própria linha em branco.
+        if (lineCtx && (prevWasElem || out.length > 0 || seenLine)) out += "\n";
+        seenLine = true;
         out += nodeToText(ch);
+        prevWasElem = true;
       }
     }
     // Se os filhos não produziram nada (ex.: spans vazios), cai no textContent.
@@ -899,10 +1045,20 @@
       btn.onclick = (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        // Blocos podem ter múltiplas linhas: cada linha é um comando, executado
-        // em sequência (mesmo sid → cwd/env preservados). Sem popup de confirmação.
+        // O bloco de código é executado como UM ÚNICO script, exatamente como
+        // se colado numa janela de terminal: heredocs, `set -e`, pipes,
+        // continuações (`\`) e multilinha são preservados. Quebrar por linha
+        // (splitBlockCommands) só vale para linhas independentes do composer
+        // (`!cmd`), onde cada linha é de fato um comando avulso.
+        //
+        // IMPORTANTE: re-lê o texto do bloco AGORA, não o `cmd` capturado quando
+        // o botão foi anexado. O bloco pode ter sido lido em pleno streaming SSE
+        // (só o começo renderizado) e ficado truncado — ex.: heredoc aberto sem
+        // terminador → bash: "here-document ... delimited by end-of-file".
+        const live = codeFromBlock(block) || cmd;
+        if (live && live !== cmd) captureRawBlock(block, live);
         grayOutRunButton(btn);
-        runBlock(splitBlockCommands(cmd), true, cmd);
+        runCommand(live, true, live);
       };
       // Insere logo antes do <pre>/bloco, se possível.
       const pre = block.querySelector && block.querySelector("pre");
@@ -943,6 +1099,6 @@
   }, 500);
 
   if (typeof module !== "undefined") {
-    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, clearOutput, pushOutput, grayOutRunButton, scrollToLastRunButton, getLastResult: () => lastResult, getOutputLog: () => outputLog, getHistory: () => history };
+    module.exports = { extractCommands, commandsFromUserText, attachComposerWatcher, pasteLastResult, attachPasteLastButton, runCommand, runBlock, splitBlockCommands, codeFromBlock, resultToText, clearOutput, pushOutput, grayOutRunButton, scrollToLastRunButton, getLastResult: () => lastResult, getOutputLog: () => outputLog, getHistory: () => history, maybeRunFromText, stripSseNoise };
   }
 })();

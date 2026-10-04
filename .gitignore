@@ -8,8 +8,14 @@ __pycache__/
 *.tmp
 *.log
 
+# Execuções salvas (comando + saída íntegros)
+server/log/
+
 # Node
 node_modules/
 
 # OS
 .DS_Store
+
+# Scripts locais de conveniência
+tmp/

@@ -56,10 +56,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
         log("info", `POST /run → ${cfg.serverUrl}`);
         let res;
+        // `t` declarado FORA do try: o bloco `finally` tem escopo proprio e
+        // NAO enxerga um `const t` declarado dentro do `try`. Era a causa do
+        // "ReferenceError: t is not defined" no finally ao falhar o fetch.
+        let t = null;
         try {
           const ctrl = new AbortController();
           const budgetMs = (msg.timeout ? msg.timeout * 1000 : 120000) + 5000;
-          const t = setTimeout(() => ctrl.abort(), budgetMs);
+          t = setTimeout(() => ctrl.abort(), budgetMs);
+          if (t && typeof t.unref === "function") t.unref();
           res = await fetch(cfg.serverUrl.replace(/\/$/, "") + "/run", {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Token": cfg.token },
@@ -71,7 +76,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               sid: msg.sid || cfg.sid,
             }),
           });
-          clearTimeout(t);
         } catch (e) {
           const hint = `não foi possível falar com o servidor em ${cfg.serverUrl} ` +
             `(${e && e.message ? e.message : e}). Verifique se o servidor está no ar, ` +
@@ -79,6 +83,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           log("error", hint);
           sendResponse({ ok: false, exit: -1, stdout: "", stderr: "FetchError: " + hint });
           return;
+        } finally {
+          clearTimeout(t);
         }
         const data = await res.json();
         if (!res.ok) {
@@ -131,6 +137,7 @@ function requestApproval(cmd, cfg) {
         resolve(false);
       }
     }, 120_000);
+    if (timer && typeof timer.unref === "function") timer.unref();
     pending.set(id, { cmd, resolve, timer });
 
     // UI de aprovação é renderizada pelo content.js via storage.

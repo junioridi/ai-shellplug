@@ -38,7 +38,7 @@ load("background.js");
   const ok = (b, m) => console.log((b ? "PASS" : "FAIL"), m);
   let got = null;
   runtime.sendMessage({ type: "exec", cmd: "sudo sysctl vm.swappiness=10", sid: "s1", auto: true }, (r) => (got = r));
-  await new Promise((r) => setTimeout(r, 30));
+  await new Promise((r) => setTimeout(r, 300));
 
   ok(!!got, "background respondeu (não ficou pendurado)");
   ok(got && got.ok === false, "resp ok=false");

@@ -36,16 +36,40 @@ sudo AISHELLPLUG_TOKEN=seu-token-aqui ../.venv/bin/python server.py
 Variáveis: `AISHELLPLUG_TOKEN`, `AISHELLPLUG_HOST`, `AISHELLPLUG_PORT`,
 `AISHELLPLUG_TIMEOUT`, `AISHELLPLUG_LOG`, `AISHELLPLUG_AS_ROOT` (default `1`:
 comandos com privilégio de superusuário), `AISHELLPLUG_REQUIRE_ROOT` (default `1`:
-o processo exige root e auto-eleva no boot; `0` apenas avisa e usa `sudo -n` por comando).
+o processo exige root e auto-eleva no boot; `0` apenas avisa e usa `sudo -n` por comando),
+`AISHELLPLUG_SESSION_USER` (usuário-alvo dos comandos quando o servidor roda como root),
+`AISHELLPLUG_DEFAULT_SESSION_USER` (fallback, default `junior`) e
+`AISHELLPLUG_SUDO_PASSWORD` (senha p/ sudo não-interativo via `sudo -S`; nunca logada).
 
 ### Superusuário
 - Por padrão o servidor roda como **root** (Linux/macOS) e executa cada shell com
   privilégio de superusuário (euid 0). No Windows, requer processo elevado (admin).
-- `GET /health` retorna `{"root": true|false, "euid": N, "as_root": bool}`.
-- Se o processo não for root, cada comando é prefixado com `sudo -n` (não-interativo);
-  sem sudo sem senha configurado, os comandos falham com `sudo: a password is required`
-  — nesse caso suba o servidor diretamente com `sudo`.
+- `GET /health` retorna `{"root": true|false, "euid": N, "as_root": bool, "session_user": "..."|null}`.
+- Se o processo não for root, cada comando é prefixado com `sudo -n` (ou `sudo -S`
+  quando `AISHELLPLUG_SUDO_PASSWORD` está definida); sem senha configurada, os
+  comandos falham com `sudo: a password is required` — defina a senha ou suba o
+  servidor diretamente com `sudo`.
 - Para rodar como usuário comum (sem privilégio): `AISHELLPLUG_AS_ROOT=0`.
+
+### Usuário da sessão (Linux, quando o servidor é root)
+Rodar *todos* os comandos como root quebra `systemctl --user`, grava arquivos com dono
+errado e ignora o home do usuário. Em vez disso, defina:
+
+```bash
+# comandos rodarão como 'junior', numa shell de login (-i): HOME, XDG_* e
+# systemd --user corretos, cwd inicial = home do usuário. A senha do sudo é
+# usada de forma não-interativa (sudo -S), sem prompt.
+sudo env AISHELLPLUG_TOKEN=tok AISHELLPLUG_SESSION_USER=junior \
+  AISHELLPLUG_SUDO_PASSWORD=jazz3023 ../.venv/bin/python server.py
+```
+
+- Se `AISHELLPLUG_SESSION_USER` não for definido, o servidor tenta `SUDO_USER` e,
+  em seguida, o dono do diretório de onde foi iniciado, e por fim
+  `AISHELLPLUG_DEFAULT_SESSION_USER` (default `junior`). Sem alvo detectado, roda
+  como root e emite um aviso no boot.
+- Cada comando é executado via `sudo -H -u <user> -i bash -l`; a senha (quando
+  configurada) vai pela stdin em `sudo -S` e o script do comando logo em seguida,
+  preservando heredocs e blocos multi-linha exatamente como escritos.
 
 ## Extensão
 1. `chrome://extensions` → modo desenvolvedor → "Carregar sem compactação" → pasta `extension/`.
@@ -85,12 +109,23 @@ o processo exige root e auto-eleva no boot; `0` apenas avisa e usa `sudo -n` por
 node extension/test_parser.js        # parser + manifest + sintaxe JS
 node extension/test_e2e.js           # banner de aprovação (detecção por texto)
 node extension/test_codeblock.cjs    # botão ▶ Executar (exec auto:true, sem popup)
+node extension/test_stream_trunc.cjs # REGRESSÃO: bloco lido em streaming não trunca heredoc
 node extension/test_pastelast.cjs    # botão 📋 Colar último resultado
 node extension/test_hotkey.js        # atalho
 node extension/test_gatilho.js       # gatilho por texto
 node extension/test_sse.js           # parser do stream SSE
 curl -s 127.0.0.1:8765/health        # com o servidor de pé
 ```
+
+## Heredoc & truncamento em streaming (bug corrigido)
+Sintoma: `warning: here-document at line N delimited by end-of-file (wanted 'CONKY')`.
+Causa: o DeepSeek **adiciona** o `.md-code-block` ao DOM no começo do streaming; o
+`codeObserver` anexava o botão ▶ naquele instante e congelava o `cmd` **parcial**
+(~250b). O heredoc chegava aberto ao bash.
+Correção (cliente): o clique do ▶ re-lê o bloco **ao vivo** (`codeFromBlock(block)`),
+não o texto capturado no attach — ver `attachRunButtons`/`codeObserver` em `content.js`.
+Salvaguarda (servidor): `_open_heredoc()` em `server.py` detecta heredoc aberto no cmd
+e grava `bad_heredoc` no JSON + evento `run.bad_heredoc` (warn) no `exec.log`.
 
 ## Pendências / frágil por natureza
 - Seletores do DeepSeek podem mudar (DOM) → ajustar `scan()` em `content.js`.

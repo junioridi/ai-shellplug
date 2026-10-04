@@ -67,8 +67,8 @@ const cases = [
   // múltiplos comandos distintos
   ['{"tool":"exec","cmd":"a"}\n{"tool":"exec","cmd":"b"}', ["a", "b"]],
   // ---- respostas NATURAIS do DeepSeek (sem JSON): bloco ```bash ----
-  ["Claro! Rode:\n\n```bash\n$ ls -la\n$ whoami\n```\n", ["ls -la", "whoami"]],
-  ["```sh\n# lista\npwd\n```", ["pwd"]],
+  ["Claro! Rode:\n\n```bash\n$ ls -la\n$ whoami\n```\n", ["ls -la\nwhoami"]],
+  ["```sh\n# lista\npwd\n```", ["# lista\npwd"]],
   ["explica e Bloco:\n```shell\ndf -h\n```", ["df -h"]],
   // texto puramente natural sem bloco de shell: nada a executar
   ["A soma de 2+2 é 4. Basta usar a fórmula.", []],

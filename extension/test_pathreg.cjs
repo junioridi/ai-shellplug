@@ -31,7 +31,7 @@ const g = (t) => X.extractCommands(t).join(" | ");
 chk(g("```bash\ncat /tmp/c.txt\n```") === "cat /tmp/c.txt", "bloco bash preserva path completo");
 chk(g("```bash\npgrep -a cursor > /tmp/c.txt\n```") === "pgrep -a cursor > /tmp/c.txt", "redirect com path completo");
 chk(g("```sh\ncat /tmp/c.txt && ls\n```") === "cat /tmp/c.txt && ls", "&& preservado");
-chk(g("```shell\ncd /tmp\ncat /tmp/c.txt\n```") === "cd /tmp | cat /tmp/c.txt", "multilinha 2 cmds");
+chk(g("```shell\ncd /tmp\ncat /tmp/c.txt\n```") === "cd /tmp\ncat /tmp/c.txt", "bloco multilinha = script único");
 chk(g('```json\n{"tool":"exec","cmd":"cat /tmp/c.txt"}\n```') === "cat /tmp/c.txt", "json fenced");
 chk(g('{"tool":"exec","cmd":"cat /tmp/c.txt"}') === "cat /tmp/c.txt", "json inline");
 chk(g("A soma de 2+2 é 4. Basta usar a fórmula.") === "", "prosa sem comando => vazio");

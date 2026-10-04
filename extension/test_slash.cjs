@@ -47,8 +47,7 @@ ok(cmds.includes("cat /etc/hosts"), "extractCommands preserva / no path (json)",
 
 // 2. bloco shell com paths e URL
 cmds = X.extractCommands("```bash\nls /home/user/docs\necho https://x/y/z\n```");
-ok(cmds.includes("ls /home/user/docs"), "extractCommands preserva path no ```bash", cmds);
-ok(cmds.includes("echo https://x/y/z"), "extractCommands preserva URL no ```bash", cmds);
+ok(cmds.length === 1 && cmds[0] === "ls /home/user/docs\necho https://x/y/z", "bloco shell multilinha = script único", cmds);
 
 // 3. splitBlockCommands
 let parts = X.splitBlockCommands("ls /a/b\necho https://h/p");

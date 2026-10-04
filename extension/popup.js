@@ -73,10 +73,11 @@ async function runManual() {
   const res = await chrome.runtime.sendMessage({ type: "exec", cmd, auto: true });
   if (!res) { out.textContent = "sem resposta do background"; return; }
   const parts = [];
+  if (res.denied) parts.push("(negado pelo usuário)");
   if (res.error) parts.push("error: " + res.error);
   if (res.exit !== undefined) parts.push("exit=" + res.exit);
-  if (res.out) parts.push(res.out);
-  if (res.err) parts.push("stderr: " + res.err);
+  if (res.stdout) parts.push(res.stdout.replace(/\s+$/, ""));
+  if (res.stderr) parts.push("stderr:\n" + res.stderr.replace(/\s+$/, ""));
   out.textContent = parts.join("\n") || "(sem saída)";
 }
 
